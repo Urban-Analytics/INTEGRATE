@@ -1,0 +1,12 @@
+# Build pages for the web
+_build
+_site
+
+# vim
+*.swp
+
+# Mac crap
+.DS_Store
+
+# IDEs
+.idea/
