@@ -3,7 +3,7 @@
 
 title: INTEGRATE
 author: Alexis Comber, Bui Thanh, Nick Malleson, Minh Le Kieu, Hang Nguyen
-logo: ./assets/logo.png
+logo: ./assets/logo.webp
 
 # Force re-execution of notebooks on each build.
 # See https://jupyterbook.org/content/execute.html
