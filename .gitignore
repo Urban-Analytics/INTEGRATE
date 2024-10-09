@@ -1,3 +1,6 @@
+# Don't sync API keys
+llm/code/together.ai-nm_key.txt
+
 # Build pages for the web
 _build
 _site
@@ -8,5 +11,39 @@ _site
 # Mac crap
 .DS_Store
 
-# IDEs
+# jupyter stuff
+**/.virtual_documents/
+**/.ipynb_checkpoints/
+
+# LaTeX build files
+*.aux
+*.bbl
+*.blg
+*.brf
+*.idx
+*.ilg
+*.ind
+*.inx
+*.log
+*.lof
+*.lot
+*.out
+*.toc
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.nav
+*.snm
+*.vrb
+
+# Intermediate and output files
+*.pdf
+*.dvi
+*.ps
+*.eps
+
+# Editor-specific files
+.vscode/
 .idea/
+*.swp
+*.swo
