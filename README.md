@@ -4,7 +4,10 @@ Integrated Analysis of Social Media and Hedonic House Prices for Neighbourhood C
 
 Main website: https://urban-analytics.github.io/INTEGRATE
 
-The files for the website are in jupyter book format, stored in the [`web`](./web) directory. 
+## Repository structure 
+
+ - [`llm`](./llm): code and writing for the work on detecting emerging gentrification with large language models (LLMs).
+ - [`web`](./web): the files for the website are in jupyter book format, stored in this directory. There are files in the [`.github/workflows`](.github/workflows) directory that control how the website is built.
 
 
 ## Project Overview
