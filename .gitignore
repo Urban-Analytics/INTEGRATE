@@ -47,3 +47,4 @@ _site
 .idea/
 *.swp
 *.swo
+.Rproj.user
