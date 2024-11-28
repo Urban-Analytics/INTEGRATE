@@ -1,1 +1,1 @@
-For R code (mostly LEx)
+For R code (mostly Lex)
