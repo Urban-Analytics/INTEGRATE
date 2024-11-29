@@ -1,4 +1,4 @@
-Some notes arising from meeting, Lex and Nick meeting 28 November 2024
+Some notes arising from a meeting, Lex and Nick meeting 28 November 2024.
 
 Research Questions
 
