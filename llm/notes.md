@@ -23,7 +23,7 @@ Ideas:
 - Use / pay for Amazon Mechanical Turk to manually classify tweets into Gentrification / Not Gentrification with the prompt "does this tweet tell you something about gentrification or not?"
 - Examine larger amounts of text: Perhaps use Open AirBnB to examine AirBnB reviews?
 
-Actions:Parallel workflows to examine the above questions 
+Actions: Parallel workflows to examine the above questions 
 -	Nick examining longer texts (reviews etc)
 -	Lex examining tweets
 
