@@ -1,5 +1,5 @@
 # Don't sync API keys
-llm/code/together.ai_key.txt
+llm/python/together.ai_key.txt
 
 # Build pages for the web
 _build
