@@ -2,39 +2,35 @@
 
 name: deploy-web
 
-# Only run this when the main branch changes
 on:
   push:
     branches:
-    - main
+      - main
 
-# This job installs dependencies, builds the book, and pushes it to `gh-pages`
 jobs:
-  deploy-web:
+  build:
     runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
 
-    # Install dependencies
-    - name: Set up Python 3.9.21
-      uses: actions/setup-python@v1
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
       with:
-        python-version: 3.9.21 
+        python-version: 3.9
 
     - name: Install dependencies
       run: |
-        pip install -r .github/workflows/requirements.txt
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
 
-    # Build the book
-    - name: Build the book
-      run: |
-        jupyter-book build ./web/
+    - name: Build Jupyter Book
+      run: jupyter-book build ./web/ --builder html
 
-    # Push the book's HTML to github-pages
-    - name: GitHub Pages action
+    - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3.6.1
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./web/_build/html
-        publish_branch: gh-pages
-
+        keep_files: true
