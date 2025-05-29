@@ -1,5 +1,98 @@
 import numpy as np
 
+def plot_flexible_radar_GI(ax, indicators, all_vars, color='blue', title='Radar Chart',
+                        show_std=False, group_labels=True, label_size=10, fixed_max=None, show_radial_labels=True):
+
+    groups = {
+    'RMD':  ['rmd_z'],
+    'House Price': ['house_price_z'],
+    'Demographic': ['BME_z'],
+    'Mobility': ['churn_z'],
+    'Wages': ['wage_change_z']}
+
+
+    # Calculate stats
+    means = indicators[all_vars].mean().values.tolist()
+    means += means[:1]
+    angles = np.linspace(0, 2 * np.pi, len(all_vars), endpoint=False).tolist()
+    angles += angles[:1]
+
+    if show_std:
+        stds = indicators[all_vars].std().values.tolist()
+        stds += stds[:1]
+        std_upper = np.array(means) + np.array(stds)
+        std_lower = np.array(means) - np.array(stds)
+        max_val = max(std_upper) * 1.1
+    else:
+        std_upper = std_lower = None
+        max_val = max(means) * 1.1
+
+    if fixed_max is not None:
+        max_val = fixed_max
+
+    # Set scale and draw background
+    if fixed_max is not None:
+        ax.set_ylim(-fixed_max, fixed_max)
+    else:
+        data_min = min(means if not show_std else std_lower)
+        data_max = max(means if not show_std else std_upper)
+        buffer = (data_max - data_min) * 0.1
+        ax.set_ylim(data_min - buffer, data_max + buffer)
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels([])
+
+    # Optionally show radial circle labels
+    if show_radial_labels:
+        n_circles = 4
+        min_ylim, max_ylim = ax.get_ylim()
+        ticks = np.linspace(min_ylim, max_ylim, n_circles + 1)
+        ax.set_yticks(ticks)
+        ax.set_yticklabels([f"{tick:.1f}" for tick in ticks], fontsize=9)
+    else:
+        ax.set_yticklabels([])
+
+    # Plot main line
+    ax.plot(angles, means, color=color, linewidth=4, label='Mean')
+
+    # Optional std shading
+    if show_std and std_upper is not None:
+        n_steps = 10
+        for i in range(n_steps):
+            alpha = 0.1 # * (1 - i / n_steps)
+            lower = std_lower + (np.array(means) - std_lower) * (i / n_steps)
+            upper = std_upper - (std_upper - np.array(means)) * (i / n_steps)
+            ax.fill_between(angles, lower, upper, color=color, alpha=alpha)
+
+    # Title
+    ax.set_title(title, size=13, pad=30)
+
+    # Group labels and separators
+    if group_labels:
+        group_labels_dict = {}
+        separators = []
+        current_idx = 0
+        for group_name, group_vars in groups.items():
+            count = len(group_vars)
+            group_indices = list(range(current_idx, current_idx + count))
+            group_angles = [angles[i] for i in group_indices]
+            middle_angle = np.mean(group_angles)
+            group_labels_dict[group_name] = middle_angle
+            end_idx = current_idx + count
+            if end_idx < len(all_vars):
+                separators.append(angles[end_idx])
+            current_idx = end_idx
+
+        # Draw separators
+        for sep in separators:
+            ax.plot([sep, sep], [0, max_val], color='black', linewidth=2.5, linestyle='--')
+
+        # Draw group headings
+        for group_name, angle in group_labels_dict.items():
+            ax.text(angle, max_val * 1.15, group_name,
+                    ha='center', va='center', fontsize=label_size,
+                    fontweight='bold', rotation=np.rad2deg(angle), rotation_mode='anchor')
+
+
 def plot_mean_rose_plot_with_gradient(ax, indicators, variables, color):
 
     # Variables and stats
