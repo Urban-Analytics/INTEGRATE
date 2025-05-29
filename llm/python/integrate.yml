@@ -1,0 +1,22 @@
+name: integrate
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - contextily
+  - geopandas
+  - numpy
+  - matplotlib
+  - shapely
+  - jupyter
+  - jupyterlab
+  - pandas
+  - notebook
+  - seaborn
+  - scikit-learn
+  - scipy
+  - statsmodels
+  - sentence-transformers
+  - libgfortran
+  - ipywidgets
+prefix: /opt/homebrew/anaconda3/envs/integrate

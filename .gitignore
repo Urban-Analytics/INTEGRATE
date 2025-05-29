@@ -15,6 +15,9 @@ _site
 **/.virtual_documents/
 **/.ipynb_checkpoints/
 
+# Python stuff
+**/__pycache__/
+
 # LaTeX build files
 *.aux
 *.bbl
