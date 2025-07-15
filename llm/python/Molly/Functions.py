@@ -159,7 +159,7 @@ def map_static(neighbourhoods, df, column = 'id', save_fig = False):
 
 
 # Create a log with the current time
-LOG_FILE = os.path.join("logs", datetime.now().strftime("%Y-%m-%d-%H%M%S.log"))
+LOG_FILE = os.path.join("../logs", datetime.now().strftime("%Y-%m-%d-%H%M%S.log"))
 def log(msg):
     with open(LOG_FILE, 'a') as f:
         f.write(msg)
