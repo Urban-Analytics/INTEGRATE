@@ -164,6 +164,126 @@ def log(msg):
     with open(LOG_FILE, 'a') as f:
         f.write(msg)
 
+def get_gentrification_scores_categorical_one_per_lsoa(batch_tweets, system_prompt, client, batch_index=0, max_tokens=1000):
+    """
+    Retrieves gentrification scores for a batch of tweets using the Together AI API.
+
+    Returns:
+    -------
+    ids : list of int
+        DataFrame indices for each tweet.
+    sentiments : list of str
+        Gentrification categories: 'Established', 'Gentrifying', 'Emerging', 'Undeveloped', or np.nan for 'NA'.
+    explanations : list of str
+        LLM-provided reasoning behind each score.
+    """
+
+    import re
+    import numpy as np
+    from datetime import datetime
+
+    # Prepare the list of tweets
+    tweet_list = "\n".join([f"{idx + 1}. {tweet}" for idx, tweet in enumerate(batch_tweets.text.values)])
+    system_prompt = f"{system_prompt}\n\n{tweet_list}"
+    # print(f"{len(batch_tweets)} listings in listing list")
+    
+    # Prepare API messages
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # API Call
+    response = client.chat.completions.create(
+        model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=0.2,
+        top_p=0.9,
+        top_k=40,
+        repetition_penalty=1,
+        stream=False
+    )
+
+    # Extract the assistant's reply
+    assistant_reply = response.choices[0].message.content.strip()
+
+    # Log for debugging
+    log(f"{datetime.now().strftime('%Y-%m-%d-%H%M%S')}\n"
+        f"**MESSAGE**\n{messages}\n"
+        f"**RESPONSE**\n{assistant_reply}\n\n")
+
+    # Clean response
+    assistant_reply = re.sub(r'^\s*Here are the (scores|analyses):\s*', '', assistant_reply, flags=re.IGNORECASE).strip()
+
+    # Updated regex pattern for the new format
+    pattern = r'''
+        ^\s*                                # Start of line, allow leading whitespace
+        (\d+)                               # Capture Group 1: Line number (digits only)
+        \s*[.:]\s*                          # Dot or colon separator after the number
+        (Established|Gentrifying|Emerging|Undeveloped|NA)  # Group 2: Categorical score
+        [.:]\s*                             # Dot or colon after the score
+        (.*)                                # Group 3: Explanation (rest of the line)
+        $                                   # End of the line
+    '''
+
+    # Parse the response
+    ids = []
+    scores = []
+    explanations = []
+    error_count = 0
+
+    lines = assistant_reply.split('\n')
+    for i, line in enumerate(lines):
+        # print(f"this is i : {i}") 
+        line = line.strip()
+        if not line:
+            continue
+
+        match = re.match(pattern, line, re.VERBOSE | re.IGNORECASE)
+        if match:
+            index = int(match.group(1))
+            score = match.group(2).capitalize()
+            explanation = match.group(3).strip()
+
+            log(f"{i} {line}\n\t{index},{score},{explanation}")
+            # print(f"{i} {line}\n\t{index},{score},{explanation}")
+            
+            # Validate score
+            valid_scores = ["Established", "Gentrifying", "Emerging", "Undeveloped", 'Na']
+            if score in valid_scores:
+                ids.append(index)
+                scores.append(np.nan if score == "NA" else score)
+                explanations.append(explanation)
+            else:
+                msg = f"Warning: Invalid score '{score}' on line {i}: '{line}'"
+                print(msg)
+                log(msg)
+                error_count += 1
+        else:
+            msg = f"\n*********************\n" \
+                  f"Warning: Invalid format on line {i}: '{line}'.\n" \
+                  f"The full response was: \n{assistant_reply}\n" \
+                  f"*********************\n"
+            print(msg)
+            log(msg)
+            error_count += 1
+            break
+
+        if index - 1 >= len(batch_tweets):
+            msg = f"Found {index} tweets, but there are more lines. Assuming remaining lines are junk and ignoring them."
+            log(msg)
+            print(msg)
+            break
+
+    if error_count > 0:
+        scores = [np.nan] * len(batch_tweets)
+        ids = [x + 1 for x in range(len(batch_tweets))]
+        explanations = ["ERROR"] * len(batch_tweets)
+
+    # Compute DataFrame indices
+    df_ids = [batch_index + int(id) - 1 for id in ids]
+
+    assert len(df_ids) == len(scores), f"Length of ids ({len(df_ids)}) does not match length of scores ({len(scores)})."
+
+    return df_ids, scores, explanations
 
 def get_gentrification_scores(batch_tweets, system_prompt, client, batch_index=0, max_tokens=1000):
     """
@@ -386,6 +506,7 @@ def get_gentrification_scores_categorical(batch_tweets, system_prompt, client, b
 
     lines = assistant_reply.split('\n')
     for i, line in enumerate(lines):
+        print(line)
         line = line.strip()
         if not line:
             continue
@@ -393,6 +514,7 @@ def get_gentrification_scores_categorical(batch_tweets, system_prompt, client, b
         match = re.match(pattern, line, re.VERBOSE | re.IGNORECASE)
         if match:
             index = int(match.group(1))
+            print(index)
             score = match.group(2).capitalize()
             explanation = match.group(3).strip()
 
