@@ -44,7 +44,7 @@ _site
 *.vrb
 
 # Intermediate and output files
-*.pdf
+# *.pdf
 *.dvi
 *.ps
 *.eps
