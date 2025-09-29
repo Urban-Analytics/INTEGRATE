@@ -1,13 +1,9 @@
 format: jb-book
 root: intro
 parts:
-  # PRESENTATIONS
-  # Note: Not putting a 'caption' here because otherwise it gets printed twice on the 
-  # home page (the caption gets printed plus the header of the 'presentations/overview.md' page)
-  # - caption: Presentations
-- caption: 
-  chapters:
-  - file: presentations/overview
-    sections:
-    - file: presentations/AGILE2025/agile-2025
-    - file: presentations/SSC2025/ssc-2025
+  - caption: Presentations
+    chapters:
+      - file: presentations/overview
+        sections:
+          - file: presentations/AGILE2025/agile-2025
+          - file: presentations/SSC2025/ssc-2025
