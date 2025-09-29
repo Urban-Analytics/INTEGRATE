@@ -9,4 +9,4 @@ parts:
       - file: presentations/SSC2025/ssc-2025
       - file: presentations/AGILE2024/agile-2024
       - file: presentations/GISRUK2025/gisruk-2025    
-
+      - file: presentations/TURING2024/turing-2024 
