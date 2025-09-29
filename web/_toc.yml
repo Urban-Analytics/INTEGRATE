@@ -7,3 +7,11 @@ root: intro
 #- file: markdown
 #- file: notebooks
 #- file: markdown-notebooks
+
+
+- caption: 
+  chapters:
+  - file: presentations/overview
+    sections:
+    - file: presentations/AGILE2025/agile-2025
+    
