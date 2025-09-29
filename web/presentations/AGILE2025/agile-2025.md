@@ -1,4 +1,4 @@
-# Paper presentation at AGILE 2025 in Dresden
+# Presentation at AGILE 2025 in Dresden
 
 Comber, A., Asher, M., Wang, Y., Kieu, M., Bui, Q.T., Nguyen, T.T.H., Phe, H.H. and Malleson, N., 2025. Characterising neighbourhood dynamics through social media anlaysis and house sales transactions. AGILE: GIScience Series, 6, p.18.
 
