@@ -1,7 +1,10 @@
 format: jb-book
 root: intro
-chapters:
+parts:
+- caption: 
+  chapters:
   - file: presentations/overview
     sections:
       - file: presentations/AGILE2025/agile-2025
       - file: presentations/SSC2025/ssc-2025
+    
