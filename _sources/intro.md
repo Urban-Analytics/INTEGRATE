@@ -24,5 +24,7 @@ media and linguistic contexts. CHECKING
  - Dr Minh Le Kieu, University of Auckland
  - Dr Hang Nguyen, Vietnam Japan University
 
+## Table of Contents
+
 ```{tableofcontents}
 ```
