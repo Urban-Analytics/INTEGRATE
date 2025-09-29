@@ -2,6 +2,9 @@
 llm/python/together.ai_key.txt
 llm/python/google_maps_api_key.txt
 
+llm/python/Molly/Figures/*.png
+llm/python/Molly/Figures/**/*.png
+
 # Build pages for the web
 _build
 _site
