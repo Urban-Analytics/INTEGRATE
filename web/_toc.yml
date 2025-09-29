@@ -1,17 +1,12 @@
-# Table of contents
-# Learn more at https://jupyterbook.org/customize/toc.html
-
 format: jb-book
 root: intro
-#chapters:
-#- file: markdown
-#- file: notebooks
-#- file: markdown-notebooks
-
-
+parts:
+  # PRESENTATIONS
+  # Note: Not putting a 'caption' here because otherwise it gets printed twice on the 
+  # home page (the caption gets printed plus the header of the 'presentations/overview.md' page)
+  # - caption: Presentations
 - caption: 
   chapters:
   - file: presentations/overview
     sections:
     - file: presentations/AGILE2025/agile-2025
-    
