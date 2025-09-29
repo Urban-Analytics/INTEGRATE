@@ -1,4 +1,4 @@
-Paper presentations at GISRUK 2025
+Presentations at GISRUK 2025 in Bristol
 
 Paper 1:
 Malleson, N., Quang, T. B., Nguyen Thi Thuy, H., Hoang Huu, P., Kieu, M., Asher, M., Wang, Y., & Comber, A. (2025, April 16). Using Large Language Models to Predict Neighbourhood Change. 33rd Annual GIS Research UK Conference (GISRUK), University of Bristol, UK. https://doi.org/10.5281/zenodo.15231204
