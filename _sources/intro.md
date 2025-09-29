@@ -13,7 +13,7 @@ and gentrification in these, will allow cross-cultural socio-economic and lingui
 identified and explored. Of particular interest is in how generifying process manifest themselves in
 these different settings, how they are captured or not in social media posts, and what this implies
 for approaches employing text engineering and natural language processing to different social
-media and linguistic contexts. CHECKING
+media and linguistic contexts. CHECKING AGAIN
 
 
 ## Investigators
