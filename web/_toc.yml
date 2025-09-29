@@ -10,3 +10,8 @@ parts:
       - file: presentations/AGILE2024/agile-2024
       - file: presentations/GISRUK2025/gisruk-2025    
       - file: presentations/TURING2024/turing-2024 
+      
+# PAPERS
+- caption: 
+  chapters:
+  - file: papers/overview
