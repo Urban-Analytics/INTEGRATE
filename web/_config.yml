@@ -39,3 +39,12 @@ html:
     '<div>
     This website is powered by <a href="https://jupyterbook.org">Jupyter Book</a>
     </div>'  # Will be displayed underneath the left navbar.
+  navbar:
+    - text: Home
+      url: intro.html
+    - text: Presentations
+      url: presentations/overview.html
+    - text: Papers
+      url: papers/overview.html
+
+    
