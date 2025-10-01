@@ -1,14 +1,16 @@
 # Presentation at GISScience 2025 in Christchurch
 
-[Agile](https://agile-gi.eu/) is the Association of Geographic Information Laboratories in Europe. The 27th annual conference took place from 4th to 7th June 2024 at the University of Glasgow, Scotland. The theme was “Geographic Information Science for a Sustainable Future".
+The Thirteenth International Conference on Geographic Information Science ([GIScience](https://giscience2025.org/)) was held in Christchurch, New Zealand, on 26-29 August 2025.
 
-Lex presented the following paper:
+Lex submitted the following paper:
 
-_Comber, A., Kieu, M., Bui, Q.T. and Malleson, N., 2024. Using social media data to identify neighbourhood change. AGILE: GIScience Series, 5, p.20._
+_Comber, A., Harris, R., & Brunsdon, C. (2025). Accommodating Space-Time Scaling Issues in GAM-Based Varying Coefficient Models.  In 13th International Conference on Geographic Information Science (GIScience 2025). Leibniz International Proceedings in Informatics (LIPIcs), Volume 346, pp. 15:1-15:9, Schloss Dagstuhl – Leibniz-Zentrum für Informatik, https://doi.org/10.4230/LIPIcs.GIScience.2025.15_
 
-**Abstract**: This paper explore the use social media data from Twitter to capture perceptions of neighbourhood characteristics, in relation to gentrification. It does this by defining a rudimentary lexicon of words associated with gentrification. This was used to calculate gentrification scores for geo-located tweets. These were then
-interpolated to create the surfaces in to determine spatial and temporal patterns of gentrification. There
-are a number of limitations to the methods used in this study, which are discussed and a number of related
-areas of future work are indicated.
+**Abstract**: The paper describes modifications to spatial and temporal varying coefficient (STVC) modelling, using Generalized Additive Models (GAMs). Previous work developed tools using Gaussian Process
+(GP) thin plate splines parameterised with location and time variables, and has presented a spacetime toolkit in the stgam R package, providing wrapper functions to the mgcv R package. However,
+whilst thin plate smooths with GP bases are acceptable for working with spatial problems they are not for working with space and time combined. A more robust approach is to use a tensor product
+smooth with GP basis. However, these in turn require correlation function length scale or range parameters (ρ) to be defined. These are distances (in space or time) at which the correlation function
+falls below some value, and can be used to indicate the scale of spatial and temporal dependencies between response and predictor variables (similar to geographically weighted bandwidths). The
+paper describes the problem in detail, illustrates an approach for optimising ρ and methods for determining model specification.
 
-The full conference paper is [available here]([https://github.com/Urban-Analytics/INTEGRATE/blob/main/web/presentations/AGILE2024/agile_hp_sp_v3.pdf)
+The full conference paper is [available here]([https://github.com/Urban-Analytics/INTEGRATE/blob/main/web/presentations/GISSCIENCE2-25/agile_hp_sp_v3.pdf)
