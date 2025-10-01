@@ -2,7 +2,7 @@ format: jb-book
 root: intro
 
 parts:
-  - caption: Home
+  - caption: Home2
     chapters:
       - file: intro
 
