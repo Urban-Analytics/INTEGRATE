@@ -2,10 +2,6 @@ format: jb-book
 root: intro
 
 parts:
-  - caption: Home2
-    chapters:
-      - file: intro
-
   - caption: Presentations
     chapters:
       - file: presentations/overview
