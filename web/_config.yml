@@ -73,25 +73,61 @@ html:
 #     url: papers/overview.html
 
 
+
+# sphinx:
+#   config:
+#     html_theme: pydata_sphinx_theme
+#     html_theme_options:
+#       navbar_center:
+#         - navbar-nav
+#       navbar_end:
+#         - navbar-icon-links
+#       icon_links:
+#         - name: GitHub
+#           url: https://github.com/Urban-Analytics/INTEGRATE
+#           icon: fab fa-github
+
+#       # 👇 Main navbar links
+#       navbar_links:
+#         - name: Home
+#           url: intro.html
+
+#         - name: Presentations
+#           children:
+#             - name: Overview
+#               url: presentations/overview.html
+#             - name: SSC 2025
+#               url: presentations/SSC2025/ssc-2025.html
+#             - name: AGILE 2025
+#               url: presentations/AGILE2025/agile-2025.html
+#             - name: AGILE 2024
+#               url: presentations/AGILE2024/agile-2024.html
+#             - name: GISRUK 2025
+#               url: presentations/GISRUK2025/gisruk-2025.html
+#             - name: Turing 2024
+#               url: presentations/TURING2024/turing-2024.html
+
+#         - name: Papers
+#           url: papers/overview.html
+
+
 sphinx:
   config:
     html_theme: pydata_sphinx_theme
     html_theme_options:
+      navbar_start:
+        - navbar-logo
       navbar_center:
         - navbar-nav
       navbar_end:
         - navbar-icon-links
-      icon_links:
-        - name: GitHub
-          url: https://github.com/Urban-Analytics/INTEGRATE
-          icon: fab fa-github
 
-      # 👇 Main navbar links
-      navbar_links:
+      # Main navbar items
+      primary_nav:
         - name: Home
           url: intro.html
-
         - name: Presentations
+          url: "#"
           children:
             - name: Overview
               url: presentations/overview.html
@@ -105,6 +141,5 @@ sphinx:
               url: presentations/GISRUK2025/gisruk-2025.html
             - name: Turing 2024
               url: presentations/TURING2024/turing-2024.html
-
         - name: Papers
           url: papers/overview.html
