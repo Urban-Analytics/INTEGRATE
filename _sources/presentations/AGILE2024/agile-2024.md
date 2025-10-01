@@ -11,4 +11,4 @@ interpolated to create the surfaces in to determine spatial and temporal pattern
 are a number of limitations to the methods used in this study, which are discussed and a number of related
 areas of future work are indicated.
 
-The full conference paper is [available here](https://github.com/Urban-Analytics/INTEGRATE/blob/main/web/presentations/AGILE2024/agile_hp_sp_v3.pdf)
+The full conference paper is [available here]([https://github.com/Urban-Analytics/INTEGRATE/blob/main/web/presentations/AGILE2024/agile_hp_sp_v3.pdf)
