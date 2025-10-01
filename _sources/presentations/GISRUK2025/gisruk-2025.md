@@ -1,6 +1,6 @@
 # Presentations at GISRUK 2025 in Bristol
 
-[Geographical Information Science Research UK (GISRUK)](https://gisruk.org/) is a community of academics and practitioners whose mission is the advancement of spatial sciences and the nurturing of the next-generation spatial experts. The 33rd annual conference took place from 23rd to 27th April 2025 at the University of Bristol, England. 
+Geographical Information Science Research UK [(GISRUK)](https://gisruk.org/) is a community of academics and practitioners whose mission is the advancement of spatial sciences and the nurturing of the next-generation spatial experts. The 33rd annual conference took place from 23rd to 27th April 2025 at the University of Bristol, England. 
 
 Nick presented the following paper:
 
