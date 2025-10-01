@@ -14,3 +14,5 @@ score individual social media posts with the a measure of the degree to which th
 neighbourhood is experiencing change, providing confirmatory evidence or not of gentrification. A number
 of areas of further work are identified.
 
+The full conference paper is [available here](https://github.com/Urban-Analytics/INTEGRATE/blob/main/web/presentations/AGILE2025/AGILE_2025_v2.pdf)
+
