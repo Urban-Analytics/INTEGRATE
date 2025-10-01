@@ -34,13 +34,40 @@ html:
   favicon: ./assets/logo.jpg
 
 # Sphinx options (controls theme)
+# sphinx:
+#   config:
+#     html_theme_options:
+#       header_navigation:
+#         - text: Home
+#           url: intro.html
+#         - text: Presentations
+#           url: presentations/overview.html
+#         - text: Papers
+#           url: papers/overview.html
+
+
+
 sphinx:
   config:
+    html_theme: pydata_sphinx_theme
     html_theme_options:
-      header_navigation:
-        - text: Home
-          url: intro.html
-        - text: Presentations
-          url: presentations/overview.html
-        - text: Papers
-          url: papers/overview.html
+      navbar_start:
+        - navbar-logo
+      navbar_center:
+        - navbar-nav
+      navbar_end:
+        - navbar-icon-links
+      icon_links:
+        - name: GitHub
+          url: https://github.com/Urban-Analytics/INTEGRATE
+          icon: fab fa-github
+      primary_sidebar_end: []
+
+
+navbar_links:
+  - name: Home
+    url: intro.html
+  - name: Presentations
+    url: presentations/overview.html
+  - name: Papers
+    url: papers/overview.html
