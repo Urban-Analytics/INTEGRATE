@@ -1,115 +1,30 @@
 # Book settings
-# Learn more at https://jupyterbook.org/customize/config.html
-
 title: INTEGRATE
 author: Alexis Comber, Bui Thanh, Nick Malleson, Minh Le Kieu, Hang Nguyen
 logo: ./assets/logo.jpg
 
-# Execution settings
 execute:
   execute_notebooks: auto
 
-# PDF build
 latex:
   latex_documents:
     targetname: web.tex
 
-# References
 bibtex_bibfiles:
   - ./references.bib
 
-# Repository info
 repository:
   url: https://github.com/Urban-Analytics/INTEGRATE
   branch: gh-pages
 
-# HTML options
 html:
   use_repository_button: true
   use_issues_button: true
   use_edit_page_button: true
   navbar_number_sections: true
-  home_page_in_toc: true    # show homepage in sidebar, with short label from _toc.yml
-  extra_navbar: ""          # remove default "Powered by Jupyter Book" footer
+  home_page_in_toc: true
+  extra_navbar: ""
   favicon: ./assets/logo.jpg
-
-# Sphinx options (controls theme)
-# sphinx:
-#   config:
-#     html_theme_options:
-#       header_navigation:
-#         - text: Home
-#           url: intro.html
-#         - text: Presentations
-#           url: presentations/overview.html
-#         - text: Papers
-#           url: papers/overview.html
-
-
-
-# sphinx:
-#   config:
-#     html_theme: pydata_sphinx_theme
-#     html_theme_options:
-#       navbar_start:
-#         - navbar-logo
-#       navbar_center:
-#         - navbar-nav
-#       navbar_end:
-#         - navbar-icon-links
-#       icon_links:
-#         - name: GitHub
-#           url: https://github.com/Urban-Analytics/INTEGRATE
-#           icon: fab fa-github
-#       primary_sidebar_end: []
-
-
-# navbar_links:
-#   - name: Home
-#     url: intro.html
-#   - name: Presentations
-#     url: presentations/overview.html
-#   - name: Papers
-#     url: papers/overview.html
-
-
-
-# sphinx:
-#   config:
-#     html_theme: pydata_sphinx_theme
-#     html_theme_options:
-#       navbar_center:
-#         - navbar-nav
-#       navbar_end:
-#         - navbar-icon-links
-#       icon_links:
-#         - name: GitHub
-#           url: https://github.com/Urban-Analytics/INTEGRATE
-#           icon: fab fa-github
-
-#       # 👇 Main navbar links
-#       navbar_links:
-#         - name: Home
-#           url: intro.html
-
-#         - name: Presentations
-#           children:
-#             - name: Overview
-#               url: presentations/overview.html
-#             - name: SSC 2025
-#               url: presentations/SSC2025/ssc-2025.html
-#             - name: AGILE 2025
-#               url: presentations/AGILE2025/agile-2025.html
-#             - name: AGILE 2024
-#               url: presentations/AGILE2024/agile-2024.html
-#             - name: GISRUK 2025
-#               url: presentations/GISRUK2025/gisruk-2025.html
-#             - name: Turing 2024
-#               url: presentations/TURING2024/turing-2024.html
-
-#         - name: Papers
-#           url: papers/overview.html
-
 
 sphinx:
   config:
@@ -121,8 +36,10 @@ sphinx:
         - navbar-nav
       navbar_end:
         - navbar-icon-links
-
-      # Main navbar items
+      icon_links:
+        - name: GitHub
+          url: https://github.com/Urban-Analytics/INTEGRATE
+          icon: fab fa-github
       primary_nav:
         - name: Home
           url: intro.html
