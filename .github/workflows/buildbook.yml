@@ -1,4 +1,4 @@
-name: deploy-web
+name: Build and Deploy Jekyll site
 
 on:
   push:
@@ -10,23 +10,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v2
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Set up Ruby
-      uses: ruby/setup-ruby@v1
-      with:
-        ruby-version: 3.1
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.1'
 
-    - name: Install Jekyll and Minima
-      run: gem install jekyll bundler minima
+      - name: Install dependencies
+        run: |
+          gem install bundler
+          bundle install
 
-    - name: Build Jekyll site
-      run: jekyll build --source web --destination web/_site
+      - name: Build site
+        run: bundle exec jekyll build -s ./web -d ./web/_site
 
-    - name: Deploy to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v3
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: web/_site
-        keep_files: true
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./web/_site
