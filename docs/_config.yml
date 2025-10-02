@@ -19,8 +19,8 @@ email: "gy17m2a@leeds.ac.uk"
 theme: "minima"
 
 header_pages:
-- conferences.md
 - papers.md
+- presentations.md
 
 repository:
   url: https://github.com/Urban-Analytics/INTEGRATE
