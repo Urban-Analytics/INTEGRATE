@@ -2,7 +2,7 @@
 
 Geographical Information Science Research UK [(GISRUK)](https://gisruk.org/) is a community of academics and practitioners whose mission is the advancement of spatial sciences and the nurturing of the next-generation spatial experts. The 33rd annual conference took place from 23rd to 27th April 2025 at the University of Bristol, England. 
 
-Nick presented the following paper:
+<ins> Nick presented the following paper: </ins>
 
 _Malleson, N., Quang, T. B., Nguyen Thi Thuy, H., Hoang Huu, P., Kieu, M., Asher, M., Wang, Y., & Comber, A. (2025, April 16). Using Large Language Models to Predict Neighbourhood Change. 33rd Annual GIS Research UK Conference (GISRUK), University of Bristol, UK. https://doi.org/10.5281/zenodo.15231204_
 
@@ -10,8 +10,11 @@ _Malleson, N., Quang, T. B., Nguyen Thi Thuy, H., Hoang Huu, P., Kieu, M., Asher
 of new house price bubbles.
 
 The full conference paper is [available here](https://urban-analytics.github.io/INTEGRATE/presentations/GISRUK2025/gisruk2025-llm-airbnb.pdf).
+The full conference paper is [available here](https://urban-analytics.github.io/INTEGRATE/presentations/AGILE2025/AGILE_2025_v2.pdf)
 
-Lex presented the following papers:
+<ins>  Lex presented the following papers: </ins>
+
+##1
 
 _Comber, A., Asher, M., Wang, Y., Le Kieu, M., Quang, T., Nguyen Thi, H., Hoang Huu, P., & Malleson, N. (2025, April 15). Using house sales transactions data to identify potentially gentrifying neighbourhoods. 33rd Annual GIS Research UK Conference (GISRUK), University of Bristol, UK. https://doi.org/10.5281/zenodo.15225193_
 
@@ -19,6 +22,8 @@ _Comber, A., Asher, M., Wang, Y., Le Kieu, M., Quang, T., Nguyen Thi, H., Hoang 
 neighbouring areas over a 10 year period, and uses a time series analysis to identify neighbourhoods with high rates of change of these as potential gentrifying neighbourhoods. The next steps are to link to analyses of social media data to characterise the nature of the observed neighbourhood change. A number of areas of further work are described and a number of critical considerations are discussed
 
 The full conference paper is [available here](https://urban-analytics.github.io/INTEGRATE/presentations/GISRUK2025/Lex_GISRUK_25.pdf).
+
+##2
 
 _Comber, A., Harris, R., & Brunsdon, C. (2025). Using GAMs to understand whether and how processes vary over space and time. 33rd Annual GIS Research UK Conference (GISRUK), University of Bristol, UK. https://doi.org/10.5281/zenodo.15225162_
 
