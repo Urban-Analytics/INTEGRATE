@@ -2,7 +2,9 @@
 
 [Agile](https://agile-gi.eu/) is the Association of Geographic Information Laboratories in Europe. The 27th annual conference took place from 4th to 7th June 2024 at the University of Glasgow, Scotland. The theme was “Geographic Information Science for a Sustainable Future".
 
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Lex presented the following paper:
+
+<ul>
+Lex presented the following paper:
 
 _Comber, A., Kieu, M., Bui, Q.T. and Malleson, N., 2024. Using social media data to identify neighbourhood change. AGILE: GIScience Series, 5, p.20._
 
@@ -12,3 +14,5 @@ are a number of limitations to the methods used in this study, which are discuss
 areas of future work are indicated.
 
 The full conference paper is [available here](https://urban-analytics.github.io/INTEGRATE/presentations/AGILE2024/agile_hp_sp_v3.pdf)
+</ul>
+
