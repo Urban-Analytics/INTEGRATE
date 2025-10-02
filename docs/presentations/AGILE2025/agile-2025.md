@@ -6,8 +6,6 @@ Lex presented the following papers:
 
 ##1
 
-<ul>
-
 _Comber, A., Asher, M., Wang, Y., Kieu, M., Bui, Q.T., Nguyen, T.T.H., Phe, H.H. and Malleson, N., 2025. Characterising neighbourhood dynamics through social media anlaysis and house sales transactions. AGILE: GIScience Series, 6, p.18._
 
 **Abstract:** This paper describes a two stage approach for identify neighbourhood areas that may undergoing gentrification related changes. It summarises classic hedonic house price data over time (2014-2023) for each
@@ -19,11 +17,9 @@ neighbourhood is experiencing change, providing confirmatory evidence or not of 
 of areas of further work are identified.
 
 The full conference paper is [available here](https://urban-analytics.github.io/INTEGRATE/presentations/AGILE2025/AGILE_2025_v2.pdf)
-</ul>
 
 ##2
 
-<ul>
 
 _Comber, A., Harris, P., and Brunsdon, C. (2025). How much time to include in multiscale space-time regressions? Optimising predictor variable temporal lags, AGILE GIScience Ser., 6, 19, https://doi.org/10.5194/agile-giss-6-19-2025_
 
@@ -31,4 +27,3 @@ _Comber, A., Harris, P., and Brunsdon, C. (2025). How much time to include in mu
 
 The full conference paper is [available here](https://urban-analytics.github.io/INTEGRATE/presentations/AGILE2025/agile-giss-6-19-2025.pdf)
 
-</ul>
