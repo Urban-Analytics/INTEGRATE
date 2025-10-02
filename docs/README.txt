@@ -1,7 +1,21 @@
-The website is built using jupyter-book. To build it type:
+# This website
 
-jupyter-book build .
+This website is built using Jekyll with the default Minima theme.
+Jekyll takes the Markdown files in this repository and turns them into a website that is automatically published via GitHub Pages.
 
-If you add new content it needs to be listed in the table of contents (_toc.yml)
+### Structure
 
-There are workflows in github that build the book automatically and publish it using github.io. See the files at: https://github.com/Urban-Analytics/INTEGRATE/tree/main/.github/workflows 
+The source files for the site are within this docs/ folder.
+
+Pages are written in Markdown (.md) and use YAML front-matter for metadata.
+
+The overarching layout of the website is defined in _config.yml.
+The content of the home page is defined in index.md.  
+The content of the papers page is defined in papers.md.  
+The content of the publications page is defined in publications.md.  
+
+### Deployment
+
+The site is built and deployed automatically by GitHub Pages whenever changes are pushed to the main branch.
+
+The website is found @ https://urban-analytics.github.io/INTEGRATE/
