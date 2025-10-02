@@ -22,7 +22,9 @@ header_pages:
 - conferences.md
 - papers.md
 
-url: 'https://urban-analytics.github.io/INTEGRATE/' # your main domain
+repository:
+  url: https://github.com/Urban-Analytics/INTEGRATE
+
 # baseurl: 'baseurl/' # if you're using custom domain keep this blank example: baseurl: ''
 
 kramdown:
