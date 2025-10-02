@@ -3,6 +3,8 @@ layout: page
 title: Presentations
 ---
 
+Presentations and posters to academic conferences about the INTEGRATE project
+
 **2025**
 
   * [Presentation at SSC 2025 in Delft.](https://urban-analytics.github.io/INTEGRATE/presentations/SSC2025/ssc-2025)
