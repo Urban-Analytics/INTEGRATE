@@ -14,6 +14,8 @@ The content of the home page is defined in index.md.
 The content of the papers page is defined in papers.md.  
 The content of the publications page is defined in publications.md.  
 
+The papers and publications linked to on the papers/publications page are defined in the respective folders.
+
 ### Deployment
 
 The site is built and deployed automatically by GitHub Pages whenever changes are pushed to the main branch.
