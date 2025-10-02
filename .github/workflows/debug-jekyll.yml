@@ -1,0 +1,112 @@
+name: Debug Jekyll build
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  debug-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show runner info
+        run: |
+          echo "Runner: $(uname -a)"
+          echo "Ruby: $(ruby -v || echo 'ruby not installed')"
+          pwd
+          ls -la
+
+      - name: List repo tree (root)
+        run: |
+          echo "=== root files ==="
+          ls -la
+          echo "=== repo files (git) ==="
+          git ls-files | sed -n '1,200p'
+
+      - name: Does Gemfile exist? (root and web/)
+        run: |
+          echo "Gemfile at root: $( [ -f Gemfile ] && echo yes || echo no )"
+          echo "Gemfile at web/: $( [ -f web/Gemfile ] && echo yes || echo no )"
+          echo "Contents of root Gemfile (if present):"
+          if [ -f Gemfile ]; then sed -n '1,200p' Gemfile; fi
+          echo "Contents of web/Gemfile (if present):"
+          if [ -f web/Gemfile ]; then sed -n '1,200p' web/Gemfile; fi
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 3.1
+
+      - name: Install bundler
+        run: gem install bundler
+
+      - name: If Gemfile at root -> bundle install
+        if: ${{ env.HAS_ROOT_GEMFILE != 'no' || always() }}
+        run: |
+          if [ -f Gemfile ]; then
+            echo "Found Gemfile at root — running bundle install (root)"
+            bundle install --jobs 4 --retry 3 || (echo "bundle install failed" && exit 1)
+            export BUILD_WITH_BUNDLER=1
+          else
+            echo "No Gemfile at root"
+          fi
+        shell: bash
+
+      - name: If Gemfile at web/ -> bundle install in web
+        run: |
+          if [ -f web/Gemfile ]; then
+            echo "Found Gemfile in web/ — running bundle install (web)"
+            cd web
+            bundle install --jobs 4 --retry 3 || (echo "bundle install (web) failed" && exit 1)
+            export BUILD_WITH_BUNDLER=1
+          else
+            echo "No Gemfile in web/"
+          fi
+        shell: bash
+
+      - name: Fallback: install jekyll & minima gem directly if no Gemfile
+        run: |
+          if [ ! -f Gemfile ] && [ ! -f web/Gemfile ]; then
+            echo "No Gemfile found anywhere — installing jekyll & minima directly"
+            gem install jekyll minima
+          else
+            echo "Gemfile present; skipping direct gem install"
+          fi
+        shell: bash
+
+      - name: Build site (attempt both layouts)
+        run: |
+          set -e
+          echo "Attempt build #1: source=web dest=web/_site (common layout)"
+          if [ -d web ]; then
+            cd web
+            if [ -f Gemfile ]; then
+              bundle exec jekyll build -s . -d _site
+            else
+              jekyll build -s . -d _site
+            fi
+            cd ..
+            echo "Built web/_site"
+            ls -la web/_site || true
+          else
+            echo "No web/ folder — trying repo root build"
+            if [ -f Gemfile ]; then
+              bundle exec jekyll build -s . -d _site
+            else
+              jekyll build -s . -d _site
+            fi
+            ls -la _site || true
+          fi
+        shell: bash
+
+      - name: Upload built site as artifact (for inspection)
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-site
+          path: |
+            web/_site
+            _site
