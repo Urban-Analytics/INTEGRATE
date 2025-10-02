@@ -11,7 +11,7 @@ This is the website for the INTEGRATE project, a collaboration between the Unive
 ## What's on this page
 
 * Table of Contents
-{:toc max_levels="2" min_levels="2"}
+{:toc min_levels="2" max_levels="3"}
 
 ## Project Overview
 
