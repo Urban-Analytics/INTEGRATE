@@ -14,5 +14,5 @@ Presentations and posters to academic conferences about the INTEGRATE project
 
 **2024**
   * [Presentation at Agile 2024 in Glasgow.](https://urban-analytics.github.io/INTEGRATE/presentations/AGILE2024/agile-2024)
-  * [Presentation at Turing 2024 in ....](https://urban-analytics.github.io/INTEGRATE/presentations/AGILE2024/agile-2024)
+  * [Presentation at Turing Urban Analytics Meeting 2024 in Glasgow](https://urban-analytics.github.io/INTEGRATE/presentations/Turing2024/turing-2024)
 
