@@ -1,3 +1,8 @@
+<p align="center">
+<img src="/logo.png" alt="drawing" width="400"/>
+</p>
+
+
 #  Integrated Analysis of Social Media and Hedonic House Prices for Neighbourhood Change (INTEGRATE)
 
 This is the website for the INTEGRATE project, a collaboration between the University of Leeds (UK), the VNU University of Science (Vietnam), the Vietnam Japan University, and the University of Auckland. 
