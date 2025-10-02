@@ -5,9 +5,7 @@ logo: ./assets/logo.jpg
 # Email / Social media user names used by the minima theme:
 # All of these are optional and can be removed or commented out
 email: "gy17m2a@leeds.ac.uk"
-twitter_username: "MollyAsher3"
-github_username: "masher92"
-linkedin_username: "molly-asher-a14b45149"
+
 #facebook_username: username
 #flickr_username: username
 #instagram_username: username
@@ -24,9 +22,8 @@ header_pages:
 - conferences.md
 - papers.md
 
-url: 'https://masher92.github.io/' # your main domain
+url: 'https://urban-analytics.github.io/INTEGRATE/' # your main domain
 # baseurl: 'baseurl/' # if you're using custom domain keep this blank example: baseurl: ''
-
 
 kramdown:
   syntax_highlighter_opts:
@@ -48,3 +45,8 @@ defaults:
       type: post
     values:
       tags: Other
+
+
+# at the top (or anywhere) of docs/_config.yml
+exclude:
+  - "references.bib"
