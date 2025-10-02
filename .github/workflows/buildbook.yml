@@ -16,21 +16,17 @@ jobs:
     - name: Set up Ruby
       uses: ruby/setup-ruby@v1
       with:
-        ruby-version: 3.1  # or whichever version you prefer
+        ruby-version: 3.1
 
-    - name: Install dependencies
-      run: |
-        gem install bundler
-        bundle install
+    - name: Install Jekyll
+      run: gem install jekyll bundler
 
     - name: Build Jekyll site
-      run: |
-        bundle exec jekyll build --source web --destination web/_site
-        # or if your Jekyll root is directly at the repo root, drop --source.
+      run: jekyll build --source web --destination web/_site
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: web/_site  # The folder produced by Jekyll build
+        publish_dir: web/_site
         keep_files: true
