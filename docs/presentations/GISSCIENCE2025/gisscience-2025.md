@@ -13,4 +13,4 @@ smooth with GP basis. However, these in turn require correlation function length
 falls below some value, and can be used to indicate the scale of spatial and temporal dependencies between response and predictor variables (similar to geographically weighted bandwidths). The
 paper describes the problem in detail, illustrates an approach for optimising ρ and methods for determining model specification.
 
-The full conference paper is [available here]([https://github.com/Urban-Analytics/INTEGRATE/presentations/GISSCIENCE2-25/agile_hp_sp_v3.pdf)
+The full conference paper is [available here]([https://github.com/Urban-Analytics/INTEGRATE/presentations/GISSCIENCE2-25/LIPIcs.GIScience.2025.15.pdf)
