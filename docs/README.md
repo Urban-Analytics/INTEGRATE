@@ -19,5 +19,6 @@ The papers and publications linked to on the papers/publications page are define
 ### Deployment
 
 The site is built and deployed automatically by GitHub Pages whenever changes are pushed to the main branch.
+You can check the progess of the run and deployment in the 'Actions' tab at the top of the page.
 
 The website is found @ https://urban-analytics.github.io/INTEGRATE/
