@@ -35,6 +35,8 @@ kramdown:
 plugins:
   - jekyll-feed
   - jekyll-sitemap
+  - jekyll-seo-tag # if you added it
+
 
 titles_from_headings:
  strip_title: true
