@@ -2,7 +2,7 @@
 
 [Agile](https://agile-gi.eu/) is the Association of Geographic Information Laboratories in Europe. The 28th annual conference took place from 25th to 29th August 2025 at Delft University of Technology, the Netherlands. The theme was “Geographic Information Science responding to Global Challenges".
 
-Lex presented the following papers:
+<ins> Lex presented the following papers: </ins> 
 
 ##1
 
