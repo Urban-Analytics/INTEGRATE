@@ -8,11 +8,6 @@
 This is the website for the INTEGRATE project, a collaboration between the University of Leeds (UK), the VNU University of Science (Vietnam), the Vietnam Japan University, and the University of Auckland. 
 
 
-## What's on this page
-
-* Table of Contents
-{:toc min_levels="2" max_levels="3"}
-
 ## Project Overview
 
 This research project aims to develop innovative methods for analysing changes in
