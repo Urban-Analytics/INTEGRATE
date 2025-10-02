@@ -7,6 +7,13 @@
 
 This is the website for the INTEGRATE project, a collaboration between the University of Leeds (UK), the VNU University of Science (Vietnam), the Vietnam Japan University, and the University of Auckland. 
 
+
+## What's on this page
+
+* Table of Contents
+{:toc}
+
+
 ## Project Overview
 
 This research project aims to develop innovative methods for analysing changes in
@@ -29,7 +36,3 @@ media and linguistic contexts.
  - Dr Minh Le Kieu, University of Auckland
  - Dr Hang Nguyen, Vietnam Japan University
 
-## Table of Contents
-
-* TOC
-{:toc}
