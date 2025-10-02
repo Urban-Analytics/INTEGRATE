@@ -1,6 +1,6 @@
 # Presentation at AGILE 2025 in Dresden
 
-[Agile](https://agile-gi.eu/) is the Association of Geographic Information Laboratories in Europe. The 28th annual conference took place from 25th to 29th August 2025 at Delft University of Technology, the Netherlands. The theme was “Geographic Information Science responding to Global Challenges".
+[Agile](https://agile-gi.eu/) is the Association of Geographic Information Laboratories in Europe. The 28th annual conference took place from 10th to 13th June 2025 at Dresden University of Technology, Germany. The theme was “Geographic Information Science responding to Global Challenges".
 
 <ins> Lex presented the following papers: </ins> 
 
