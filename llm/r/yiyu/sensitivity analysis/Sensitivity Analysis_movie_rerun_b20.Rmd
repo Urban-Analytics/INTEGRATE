@@ -1,0 +1,326 @@
+---
+title: "Sensitivity analysis-movie reviews (binary) [rerun]"
+author: "Yiyu Wang"
+date: "2025-09-23"
+output:
+  html_document:
+    df_print: paged
+  word_document: defaultss
+  pdf_document:
+    keep_tex: true
+    latex_engine: xelatex
+subparagraph: true
+urlcolor: blue
+linkcolor: black
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{booktabs}
+---
+
+```{r setup, eval = T, echo = F, message=F, warning=F, results='hide'}
+library(knitr)
+library(kableExtra)
+options(width=60)
+opts_chunk$set(echo = TRUE, comment="", error=FALSE, 
+               #cache.lazy = FALSE, 
+               fig.align="center", message=FALSE, warning=FALSE, tidy = FALSE)
+```
+
+# 1.2 LLM Sensitivity analysis - movie reviews
+### rerun - batch_size = 20
+
+```{r codeblock}
+### Setup
+library(tidyverse)
+library(readr)
+library(scales)
+library(glue)
+```
+
+```{r, eval=FALSE}
+# load data (original & rerun: batch_size=20)
+# Replace b=20 in fullgrid with rerun1, then
+# make before-vs-after comparison plots
+full   <- read_csv("llm_results/binary_movie_reviews/movie_tuning_summary_by_params.csv",  show_col_types = FALSE)
+rerun1 <- read_csv("llm_results/binary_movie_review_rerun/movie_tuning_batch20_rerun_summary2.csv", show_col_types = FALSE)
+
+# Ensure same columns (order may differ but names must match)
+stopifnot(setequal(names(full), names(rerun1)))
+# Keep consistent column order as in full
+rerun1 <- rerun1[, names(full)]
+
+# replace fullgrid (b=20)
+# Keep everything in full except b=20; then append rerun1's b=20 rows
+full_b20_fixed <- full %>%
+  filter(batch_size != 20 | is.na(batch_size)) %>%          # drop original b=20 rows
+  bind_rows(rerun1 %>% filter(batch_size == 20 | is.na(batch_size))) %>%  # add rerun1 b=20
+  arrange(dataset, batch_size, temperature, top_p, top_k, max_tokens)
+
+# Save a copy for provenance / downstream plotting scripts
+write_csv(full_b20_fixed, "llm_results/binary_movie_review_rerun/movie_tuning_summary_by_params_b20replaced.csv")
+```
+
+# Visualization
+### 1) Accuracy across batch size & temperature
+
+```{r p1}
+# load data
+rerun_b20 <- read_csv("llm_results/binary_movie_review_rerun/movie_tuning_summary_by_params_b20replaced.csv")
+# Convert some parameters to factors for plotting
+rerun_b20  <- rerun_b20  %>%
+  mutate(temperature = factor(temperature),
+         top_p = factor(top_p),
+         top_k = factor(top_k),
+         max_tokens = factor(max_tokens),
+         batch_size = factor(batch_size))
+
+my_colors <- c("0.1" = "#4C72B0",   
+               "0.2" = "#DD8452",   
+               "0.5" = "#55A868") 
+
+# p1 - Accuracy vs Batch Size
+p1 <- rerun_b20  %>%
+  ggplot(aes(x = batch_size, y = accuracy, fill = temperature)) +
+  geom_col(position = position_dodge(width = 0.8), na.rm = FALSE) +
+  labs(title = "Accuracy across batch size & temperature (Movie dataset)",
+       x = "Batch size",
+       y = "Accuracy",
+       fill = "Temperature") +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_manual(values = my_colors, na.value = "grey70") +
+  theme_bw()
+p1
+```
+
+### 2) Macro F1 across batch size & top_p
+
+```{r p2}
+# p2 - Macro F1 vs Batch Size & top_p
+top_p_labels <- c("0.8" = "top_p = 0.8",
+                  "0.9" = "top_p = 0.9",
+                  "1"   = "top_p = 1.0")
+
+p2 <- rerun_b20  %>%
+  ggplot(aes(x = batch_size, y = macro_f1, color = temperature, group = temperature)) +
+  geom_smooth(method = "loess", se = TRUE, alpha = 0.2, linewidth = 1, na.rm = FALSE) +
+  geom_point(size = 2, na.rm = FALSE) +
+  facet_wrap(~ top_p, nrow = 1, labeller = labeller(top_p = top_p_labels)) +
+  labs(title = "Macro F1 Score by Batch Size & top_p (Movie dataset)",
+       x = "Batch size",
+       y = "Macro F1 score",
+       color = "Temperature", 
+       fill = "Temperature") +
+  scale_color_manual(values = my_colors, na.value = "grey70") +
+  scale_fill_manual(values = my_colors, na.value = "grey70") +
+  theme_bw(base_size = 12)
+p2
+```
+
+### 3) Accuracy Heatmap across parameter combinations (faceted by batch size)
+
+```{r p3a-plot, fig.width=12, fig.height=8}
+# p3 - Heatmap of Accuracy
+temp_labels <- c("0.1" = "temp. = 0.1",
+                 "0.2" = "temp. = 0.2",
+                 "0.5" = "temp. = 0.5")
+
+# A: batch size as facet
+p3_a <- rerun_b20  %>%
+  ggplot(aes(x = max_tokens, y = top_k, fill = accuracy)) +
+  geom_tile(color = "white", na.rm = FALSE) +
+  labs(title = "Heatmap of Accuracy (top_k * max_tokens) by batch_size (Movie)",
+       x = "max_tokens", y = "top_k", fill = "Accuracy") +
+  scale_fill_gradient(low = "#f0f9e8", high = "#0868ac", na.value = "grey70",
+                      labels = number_format(accuracy = 0.001)) +
+  facet_grid(batch_size ~ top_p + temperature,
+             labeller = labeller(temperature = temp_labels,
+                                 top_p = top_p_labels,
+                                 batch_size = label_both)) +
+  guides(fill = guide_colorbar(title.position = "top", barwidth = 2)) +
+  theme_minimal(base_size = 10) +
+  theme(strip.background = element_rect(fill = "#f3f3f3", color = NA),
+        strip.text = element_text(face = "bold", size = 8),
+        axis.title.x = element_text(size = 14, face = "bold"),
+        axis.title.y = element_text(size = 14, face = "bold"))
+p3_a
+```
+
+### 4) Accuracy Heatmap across parameter combinations (faceted by max_tokens)
+
+```{r p3b-plot, fig.width=12, fig.height=8}
+# p3-B: max_tokens as facet; x = batch_size
+p3_b <- rerun_b20  %>%
+  ggplot(aes(x = batch_size, y = top_k, fill = accuracy)) +
+  geom_tile(color = "white", na.rm = FALSE) +
+  labs(title = "Heatmap of Accuracy (batch_size * top_k), faceted by max_tokens (Movie)",
+       x = "Batch size", y = "top_k", fill = "Accuracy") +
+  scale_fill_gradient(low = "#f0f9e8", high = "#0868ac", na.value = "grey70",
+                      labels = number_format(accuracy = 0.001)) +
+  facet_grid(top_p ~ temperature + max_tokens,
+             labeller = labeller(temperature = temp_labels,
+                                 top_p = top_p_labels,
+                                 max_tokens = label_both)) +
+  guides(fill = guide_colorbar(title.position = "top", barwidth = 2)) +
+  theme_minimal(base_size = 10) +
+  theme(strip.background = element_rect(fill = "#f3f3f3", color = NA),
+        strip.text = element_text(face = "bold", size = 8),
+        axis.title.x = element_text(size = 14, face = "bold"),
+        axis.title.y = element_text(size = 14, face = "bold"))
+p3_b
+```
+
+### 5) Precision vs Recall
+
+```{r p4}
+# p4 - Precision vs Recall
+# Threshold for outliers (customizable)
+prec_thr <- 0.85
+recall_thr <- 0.88
+
+# Identify outliers: any point with low precision OR low recall
+outliers <- rerun_b20  %>%
+  filter(precision < prec_thr | recall < recall_thr) %>%
+  mutate(combo_id = paste0("temp=", temperature,
+                           "_top_p=", top_p,
+                           "_top_k=", top_k,
+                           "_max_tokens=", max_tokens,
+                           "_batch=", batch_size))
+
+# PR scatter plot
+p_pr <- rerun_b20  %>%
+  ggplot(aes(x = precision, y = recall,
+             color = temperature, shape = batch_size)) +
+  geom_point(size = 3, alpha = 0.8) +
+  # Add threshold reference lines
+  geom_vline(xintercept = prec_thr, linetype = "dashed", color = "red", size = 0.7) +
+  geom_hline(yintercept = recall_thr, linetype = "dashed", color = "red", size = 0.7) +
+  # Highlight outliers with labels
+  geom_point(data = outliers, aes(x = precision, y = recall), 
+             color = "black", fill = "yellow", size = 4, shape = 21, stroke = 1.2) +
+  ggrepel::geom_text_repel(data = outliers, aes(x = precision, y = recall, label = combo_id),
+                           size = 3, color = "black", max.overlaps = 10) +
+  labs(title = "Precision vs Recall across parameter settings (Movie dataset)",
+       x = "Precision", y = "Recall",
+       color = "Temperature", shape = "Batch Size") +
+  theme_bw(base_size = 12)
+
+print(p_pr)
+```
+
+### 6) Balanced Accuracy vs MCC
+
+```{r p5}
+# p5 - Balanced Accuracy vs MCC 
+p5_ba_mcc <- rerun_b20  %>%
+  ggplot(aes(x = balanced_accuracy, y = mcc,
+             color = top_p)) +
+  geom_point(size = 3, alpha = 0.8, na.rm = FALSE) +
+  labs(title = "Balanced Accuracy vs MCC (Movie dataset)",
+       x = "Balanced Accuracy", y = "MCC",
+       color = "top_p") +
+  theme_bw(base_size = 12)
+
+print(p5_ba_mcc)
+```
+
+### 7) Barchart: Average missing rate vs batch size
+
+```{r p6}
+# p6: bar chart - average missing Rate vs Batch Size
+p6_miss <- rerun_b20  %>%
+  group_by(batch_size) %>%
+  summarise(avg_missing = mean(missing_rate, na.rm = TRUE)) %>%
+  ggplot(aes(x = batch_size, y = avg_missing, fill = batch_size)) +
+  geom_col(na.rm = FALSE) +
+  labs(title = "Average Missing Rate by Batch Size (Movie dataset)",
+       x = "Batch size", y = "Avg. Missing Rate") +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_brewer(palette = "Set2", na.value = "grey70") +
+  theme_bw(base_size = 12)
+print(p6_miss)
+```
+
+### 8) Failure rate heatmap
+
+```{r p7, fig.width=12, fig.height=8}
+# Failure Rate (Missing Rate) Visualization
+# Heatmap: missing rate across all parameter combinations, facet by batch_size
+p_fail_full_heat <- rerun_b20  %>%
+  ggplot(aes(x = max_tokens, y = top_k, fill = missing_rate)) +
+  geom_tile(color = "white") +
+  labs(title = "Failure Rate Heatmap across parameter combinations (Movie)",
+       x = "max_tokens", y = "top_k", fill = "Missing Rate") +
+  scale_fill_gradient(low = "#f0f9e8", high = "#d73027",
+                      na.value = "grey70",
+                      labels = percent_format(accuracy = 1)) +
+  facet_grid(batch_size ~ temperature + top_p,
+             labeller = labeller(
+               temperature = label_both,
+               top_p = label_both,
+               batch_size = label_both)) +
+  theme_minimal(base_size = 10) +
+  theme(strip.background = element_rect(fill = "#f3f3f3", color = NA),
+        strip.text = element_text(face = "bold", size = 8),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+print(p_fail_full_heat)
+```
+
+### 9) Tables: Top 5 & Bottom 5 parameter combinations
+
+```{r table, echo=FALSE}
+# Tables
+# Select key columns for reporting
+report_cols <- c("temperature", "top_p", "top_k", "max_tokens", "batch_size",
+                 "accuracy", "macro_f1", "mcc", "precision", "recall", "missing_rate")
+
+# Rank by macro_f1 (primary), then accuracy, then mcc
+ranked_df <- rerun_b20  %>%
+  arrange(desc(macro_f1), desc(accuracy), desc(mcc))
+
+# Top-5 best parameter combos
+top5 <- ranked_df %>%
+  slice_head(n = 5) %>%
+  select(all_of(report_cols))
+
+# Bottom-5 worst parameter combos
+bottom5 <- ranked_df %>%
+  slice_tail(n = 5) %>%
+  select(all_of(report_cols))
+
+# Print as tables
+cat("===== Top-5 Best Parameter Combos (Movie dataset) =====\n")
+print(top5)
+
+cat("\n===== Bottom-5 Worst Parameter Combos (Movie dataset) =====\n")
+print(bottom5)
+```
+
+### 10) Plot: Top 5 vs Bottom 5 parameter combinations
+
+```{r p8}
+# plot: top5 vs bottom5 parameter combos
+# Rank by macro_f1 > accuracy > mcc
+ranked_df <- rerun_b20  %>%
+  arrange(desc(macro_f1), desc(accuracy), desc(mcc)) %>%
+  mutate(combo_id = paste0("Combo_", row_number()))  # shorten labels
+# Select Top-5 and Bottom-5
+top5 <- ranked_df %>% slice_head(n = 5) %>% mutate(group = "Top-5")
+bottom5 <- ranked_df %>% slice_tail(n = 5) %>% mutate(group = "Bottom-5")
+
+combo_df <- bind_rows(top5, bottom5) %>%
+  select(combo_id, group, macro_f1, missing_rate) %>%
+  pivot_longer(cols = c(macro_f1, missing_rate),
+               names_to = "metric", values_to = "value")
+# Plot dotplot
+p_dot <- combo_df %>%
+  ggplot(aes(x = value, y = reorder(combo_id, value), color = group)) +
+  geom_point(size = 3) +
+  facet_wrap(~ metric, scales = "free_x") +
+  labs(title = "Top-5 vs Bottom-5 Parameter Combos (Movie)",
+       x = "Value", y = "Parameter Combo", color = "Group") +
+  theme_bw(base_size = 12)
+
+print(p_dot)
+```
+
