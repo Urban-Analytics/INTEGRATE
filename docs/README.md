@@ -9,7 +9,7 @@ The source files for the site are within this docs/ folder.
 
 Pages are written in Markdown (.md) and use YAML front-matter for metadata.
 
-The overarching layout of the website is defined in _config.yml.
+The overarching layout of the website is defined in _config.yml.  
 The content of the home page is defined in index.md.  
 The content of the papers page is defined in papers.md.  
 The content of the publications page is defined in publications.md.  
