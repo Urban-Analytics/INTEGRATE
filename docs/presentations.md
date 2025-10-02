@@ -5,11 +5,10 @@ title: Presentations
 
 **2025**
 
-  * Presentation at SSC 2025 in Delft. [Slides (pdf)](https://masher92.github.io/pdfs/2023-09-SSC.pdf). [Full paper](https://www.nature.com/articles/s41598-023-35580-z)
-  * [Presentation at Agile 2025 in Dresden.](https://Urban-Analytics/INTEGRATE/.github.io/presentations/AGILE2024/agile-2024.md)
- 
-
-
+  * [Presentation at SSC 2025 in Delft.](https://urban-analytics.github.io/INTEGRATE/presentations/SSC2025/ssc-2025)
+  * [Presentation at Agile 2025 in Dresden.](https://urban-analytics.github.io/INTEGRATE/presentations/AGILE2025/agile-2025)
+  * [Presentation at GIScience 2025 in Christchurch.](https://urban-analytics.github.io/INTEGRATE/presentations/AGILE2024/gisscience-2025)
+  * [Presentation at GISRUK 2025 in Bristol.](https://urban-analytics.github.io/INTEGRATE/presentations/GISRUK2025/gisruk-2025)
 
 **2024**
 
