@@ -31,5 +31,5 @@ media and linguistic contexts.
 
 ## Table of Contents
 
-```{tableofcontents}
-```
+* TOC
+{:toc}
