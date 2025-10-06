@@ -7,7 +7,7 @@ Main website: https://urban-analytics.github.io/INTEGRATE
 ## Repository structure 
 
  - [`llm`](./llm): code and writing for the work on detecting emerging gentrification with large language models (LLMs).
- - [`web`](./docs): the files for the website are stored in this directory. The website is built using Jekyll with the default Minima them
+ - [`docs`](./docs): the files for the website are stored in this directory. The website is built using Jekyll with the default Minima them
 
 ## Project Overview
 
