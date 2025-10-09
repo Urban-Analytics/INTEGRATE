@@ -1,0 +1,524 @@
+---
+title: "Sensitivity Analysis - Music Scoring [new param combos]"
+author: "Yiyu Wang"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document:
+    keep_tex: true
+    latex_engine: xelatex
+subparagraph: true
+urlcolor: blue
+linkcolor: black
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{booktabs}
+---
+```{r setup, eval = T, echo = F, message=F, warning=F, results='hide'}
+library(knitr)
+library(kableExtra)
+options(width=60)
+opts_chunk$set(echo = TRUE, comment="", error=FALSE, 
+               #cache.lazy = FALSE, 
+               fig.align="center", message=FALSE, warning=FALSE, tidy = FALSE)
+```
+
+# LLM-based Analysis for Restaurant, Movie and Music Reviews
+## Part 2: Sensitivity Analysis - music 0-100 scoring
+
+```{r codeblock, echo=FALSE}
+### Setup
+library(tidyverse)
+library(httr)
+library(jsonlite)
+library(glue)
+library(dplyr)
+library(purrr)
+library(readr)
+library(stringr)
+library(ggrepel)
+```
+
+```{r, eval=FALSE}
+# load data
+music_data <- read_csv("data/pitchfork_reviews.csv") %>%
+  transmute(id = row_number(),
+            review = as.character(review),
+            score = as.numeric(score) * 10  # scale to 0–100
+  ) %>%
+  filter(!is.na(review), !is.na(score))
+
+# create a new results directory to avoid overwriting old results.
+base_dir <- "Sensitivity_Analysis_new_prams"
+log_dir <- file.path(base_dir, "logs", "logs_music_scoring")
+result_dir <- file.path(base_dir, "results", "music_scoring")
+
+dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(result_dir, recursive = TRUE, showWarnings = FALSE)
+
+# batch split
+split_batches <- function(data, batch_size) {
+  split(data, ceiling(seq_len(nrow(data)) / batch_size))
+}
+
+# prompt design (few-shot examples)
+generate_prompt_music <- function(batch_size) {
+  glue(
+    "You are an expert AI music reviewer, designed to assess and score the quality of music albums based on written reviews. 
+     Pitchfork reviews typically score most albums between 60 and 80, with truly exceptional albums sometimes scoring above 90, and poor albums below 50.
+     Please use the full range where appropriate, but avoid clustering all scores near the mean. 
+     Do not assign most reviews similar scores - use lower and higher scores when justified by the review content.
+
+     Here are some example reviews and their corresponding scores:
+     1. ‘A breathtaking, genre-defying album that rewrites the rules of pop music.’ → 96
+     2. ‘Though the production is clean, most tracks are uninspired and forgettable.’ → 52
+     3. ‘A solid indie rock record with a few standout songs but too much filler.’ → 68
+     4. ‘Truly disappointing, lacking any memorable hooks or emotion.’ → 37
+     5. ‘Inventive, emotionally resonant, and brilliantly produced.’ → 88
+
+     I will provide you with a batch of {batch_size} music reviews. 
+     Your task is to analyze the text in each review and assign a numerical score on a 0-100 range, 
+     Scoring rules:
+      - 0–20: very poor
+      - 21–40: below average
+      - 41–60: average
+      - 61–80: good to very good
+      - 81–90: excellent
+      - 91–100: exceptional"
+  )
+}
+
+build_messages_music <- function(batch_reviews) {
+  n <- nrow(batch_reviews)
+  sys_msg <- glue(
+    "You are an AI that outputs scores for music reviews.
+     Output ONLY a valid JSON array of exactly {n} integers (0-100), one per review, in a structured format.
+     No reasoning, no explanations, no labels, no extra text.
+     Example: [87, 74, 92, 51, 69, ...].
+     Ensure the JSON array length matches {n} before returning it."
+  )
+  user_msg <- paste0(
+    generate_prompt_music(n), "\n\n",
+    paste0(seq_along(batch_reviews$review), ". ", batch_reviews$review, collapse = "\n")
+  )
+  list(
+    list(role = "system", content = sys_msg),
+    list(role = "user", content = user_msg)
+  )
+}
+
+# parse LLM output
+extract_numeric_vec <- function(x) {
+  if (is.numeric(x)) return(as.numeric(x))
+  if (is.list(x)) return(as.numeric(unlist(lapply(x, extract_numeric_vec))))
+  return(numeric(0))
+}
+
+clamp01_100_int <- function(v) {
+  v <- round(as.numeric(v))
+  v[!is.finite(v)] <- NA_real_
+  list(
+    raw = v,
+    clamped = pmin(pmax(v, 0), 100),
+    out_of_range = ifelse(is.na(v), NA_integer_, as.integer(v < 0 | v > 100))
+  )
+}
+
+parse_scores_continuous <- function(raw_output, n_expected) {
+  txt <- trimws(if (is.null(raw_output)) "" else raw_output)
+  if (startsWith(txt, "[") && !grepl("\\]$", txt) && nchar(txt) < 20000) {
+    txt <- paste0(txt, "]")
+  }
+  parsed <- try(jsonlite::fromJSON(txt), silent = TRUE)
+  nums <- NULL
+  if (!inherits(parsed, "try-error")) nums <- extract_numeric_vec(parsed)
+  
+  if ((is.null(nums) || length(nums) == 0) && nzchar(txt)) {
+    m <- regexpr("\\[[^\\]]*\\]", txt, perl = TRUE)
+    if (m[1] != -1) {
+      candidate <- substr(txt, m[1], m[1] + attr(m, "match.length") - 1)
+      parsed2 <- try(jsonlite::fromJSON(candidate), silent = TRUE)
+      if (!inherits(parsed2, "try-error")) nums <- extract_numeric_vec(parsed2)
+    }
+  }
+  if (is.null(nums) || length(nums) == 0) {
+    matches <- gregexpr("[-+]?[0-9]*\\.?[0-9]+", txt, perl = TRUE)
+    if (matches[[1]][1] != -1) nums <- as.numeric(regmatches(txt, matches)[[1]])
+  }
+  if (is.null(nums) || length(nums) == 0) {
+    return(list(pred = rep(NA_real_, n_expected), out_of_range = rep(NA_integer_, n_expected)))
+  }
+  if (length(nums) < n_expected) nums <- c(nums, rep(NA_real_, n_expected - length(nums)))
+  if (length(nums) > n_expected) nums <- nums[seq_len(n_expected)]
+  adj <- clamp01_100_int(nums)
+  list(pred = adj$clamped, out_of_range = adj$out_of_range)
+}
+
+# API config
+url <- "https://api.together.xyz/v1/chat/completions"
+api_key <- Sys.getenv("TOGETHER_API_KEY")
+if (!nzchar(api_key)) {
+  stop("API key not found. Please set with Sys.setenv(TOGETHER_API_KEY='your_real_key')")
+}
+
+# batch runner
+run_batch_music <- function(batch_reviews, param_row, batch_index, log_file) {
+  messages <- build_messages_music(batch_reviews)
+  n <- nrow(batch_reviews)
+  
+  body_list <- list(
+    model = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    messages = messages,
+    temperature = param_row$temperature,
+    top_p = param_row$top_p,
+    top_k = param_row$top_k,
+    repetition_penalty = param_row$repetition_penalty,
+    max_tokens = param_row$max_tokens,
+    stream = FALSE
+  )
+  
+  t0 <- Sys.time()
+  response <- httr::POST(
+    url,
+    httr::add_headers(Authorization = paste("Bearer", api_key), `Content-Type` = "application/json"),
+    body = body_list,
+    encode = "json"
+  )
+  t1 <- Sys.time()
+  latency_sec <- as.numeric(difftime(t1, t0, units = "secs"))
+  status <- tryCatch(httr::status_code(response), error = function(e) NA_integer_)
+  
+  result <- try(httr::content(response, as = "parsed", type = "application/json"), silent = TRUE)
+  assistant_reply <- NA_character_
+  if (!inherits(result, "try-error") && !is.null(result$choices)) {
+    assistant_reply <- paste(result$choices[[1]]$message$content, collapse = " ")
+    assistant_reply <- str_trim(assistant_reply)
+  }
+  
+  parsed <- list(pred = rep(NA_real_, n), out_of_range = rep(NA_integer_, n))
+  if (!is.na(assistant_reply)) parsed <- parse_scores_continuous(assistant_reply, n)
+  
+  # minimal conditional logging (recommended)
+  if (!is.null(log_file)) {
+    na_rate <- mean(is.na(parsed$pred))
+    if (isTRUE(status != 200) || na_rate > 0) { 
+      head_txt <- substr(as.character(assistant_reply), 1, 300)
+      msg <- paste0(
+        "[batch ", batch_index, "] status=", status,
+        " | latency=", round(latency_sec, 2), "s",
+        " | NA_rate=", round(na_rate, 3),
+        " | params={temp=", param_row$temperature,
+        ", top_p=", param_row$top_p,
+        ", top_k=", param_row$top_k,
+        ", max_tokens=", param_row$max_tokens,
+        ", batch_size=", param_row$batch_size, "}",
+        " | reply_head=", head_txt
+      )
+      write(paste0(msg, "\n"), file = log_file, append = TRUE)
+    }
+  }
+  
+  tibble(
+    dataset = "music",
+    id = batch_reviews$id,
+    Review = batch_reviews$review,
+    GroundTruth = batch_reviews$score,
+    Prediction = parsed$pred,
+    OutOfRangeFlag = parsed$out_of_range,
+    batch_index = batch_index,
+    latency_sec = latency_sec,
+    temperature = param_row$temperature,
+    top_p = param_row$top_p,
+    top_k = param_row$top_k,
+    repetition_penalty = param_row$repetition_penalty,
+    max_tokens = param_row$max_tokens,
+    batch_size = n
+  )
+}
+
+# experiment runner
+run_exp_chunk_music <- function(dataset, param_chunk, chunk_id = 1) {
+  batch_counter <- 1
+  for (i in 1:nrow(param_chunk)) {
+    param_row <- param_chunk[i, ]
+    param_id <- paste0("chunk", chunk_id, "_param", i)
+    output_file <- file.path(result_dir, paste0(param_id, ".csv"))
+    
+    if (file.exists(output_file)) next
+    
+    LOG_FILE <- file.path(
+      log_dir,
+      glue("music_scoring_sensitivity_{param_id}_{format(Sys.time(), '%Y-%m-%d-%H%M%S')}.log")
+    )
+    batches <- split_batches(dataset, param_row$batch_size)
+
+    for (b in seq_along(batches)) {
+      res_b <- run_batch_music(batches[[b]], param_row, batch_counter, log_file = LOG_FILE)
+      if (b == 1) {
+        write_csv(res_b, output_file)
+      } else {
+        write_csv(res_b, output_file, append = TRUE)
+      }
+      batch_counter <- batch_counter + 1
+    }
+  }
+}
+
+# Run experiment
+# New parameter grid
+new_grid <- expand.grid(
+  temperature = c(0.1, 0.5, 1),
+  top_p = c(0.1, 0.5, 1),
+  top_k = c(10, 50, 100),
+  max_tokens = c(200),
+  batch_size = c(10),
+  stringsAsFactors = FALSE
+)
+
+# split grid into chunks
+param_chunks <- split(new_grid, ceiling(seq_len(nrow(new_grid)) / 10))
+
+# run experiments
+for (i in seq_along(param_chunks)) {
+  cat(glue("=== Running chunk {i}/{length(param_chunks)} ===\n"))
+  run_exp_chunk_music(music_data, param_chunks[[i]], chunk_id = i)
+}
+
+# merge all result CSVs into one final file
+all_csvs <- list.files(result_dir, pattern = "\\.csv$", full.names = TRUE)
+all_results <- purrr::map_dfr(all_csvs, read_csv, show_col_types = FALSE)
+write_csv(all_results, file.path(result_dir, "music_scoring_sensitivity_all_results_final.csv"))
+
+# summarize metrics
+summary_metrics <- all_results %>%
+  group_by(dataset, temperature, top_p, top_k, max_tokens, batch_size) %>%
+  summarise(
+    metrics = list(compute_regression_metrics(GroundTruth, Prediction)),
+    avg_latency = mean(latency_sec, na.rm = TRUE),
+    missing_rate = mean(is.na(Prediction)),
+    .groups = "drop"
+  ) %>%
+  tidyr::unnest_wider(metrics)
+
+write_csv(summary_metrics, file.path(result_dir, "music_scoring_sensitivity_by_params_summary.csv"))
+```
+
+# Visualization
+### 1) Boxplot of MAE (with global best point and baseline)
+
+```{r p1, fig.width=12, fig.height=8}
+all_results <- read_csv("results/music_scoring/music_scoring_sensitivity_all_results.csv")
+summary_metrics <- read_csv("results/music_scoring/music_scoring_sensitivity_by_params_summary.csv")
+# --- Identify global best points (allow ties) ---
+best_mae <- summary_metrics %>% slice_min(mae, n = 1, with_ties = TRUE)
+best_r2  <- summary_metrics %>% slice_max(r2,  n = 1, with_ties = TRUE)
+# global best MAE
+best_val <- min(summary_metrics$mae)
+
+# Fig.1: Boxplot of MAE (with best baseline and global best point)
+p_box_mae <- ggplot(summary_metrics, aes(x = factor(top_p), y = mae, fill = factor(temperature))) +
+  geom_boxplot(outlier.shape = 21, alpha = 0.7) +
+  facet_wrap(~ top_k, labeller = labeller(top_k = function(x) paste0("top_k=", x))) +
+  scale_fill_manual(values = c("0.1" = "#66c2a5", "0.5" = "#fc8d62", "1" = "#8da0cb")) +
+  labs(title = "Distribution of MAE by top_p and temperature (faceted by top_k)",
+       x = "top_p", y = "MAE", fill = "temperature") +
+  geom_point(
+    data = best_mae,
+    aes(x = factor(top_p), y = mae),
+    shape = 21, size = 4, stroke = 1.2,
+    colour = "#E69F00", fill = NA
+  ) +
+  geom_text_repel(
+    data = best_mae,
+    aes(x = factor(top_p), y = mae,
+        label = paste0("temp=", temperature, 
+                       ", top_p=", top_p, 
+                       ", \ntop_k=", top_k)),
+    nudge_y = -0.2, nudge_x = 0.8, 
+    size = 5, colour = "#E69F00", 
+    fontface = "bold", segment.color = "#E69F00"
+  ) +
+  geom_hline(yintercept = best_val, linetype = "dashed", colour = "#E69F00") +
+  theme_bw(base_size = 12) 
+p_box_mae
+
+```
+
+### 2) Scatter plot of MAE vs R^2
+
+```{r p2, fig.width=12, fig.height=8}
+# Fig.2: Scatter plot of MAE vs R^2
+p_scatter_mae_r2 <- ggplot(summary_metrics,
+                           aes(x = mae, y = r2,
+                               colour = factor(temperature),
+                               shape = factor(top_p))) +
+  geom_point(size = 3, alpha = 0.7, position = position_jitter(width = 0.05, height = 0.03)) +
+  facet_wrap(~ top_k, labeller = labeller(top_k = function(x) paste0("top_k=", x))) +
+  labs(title = "MAE vs R² across parameter combinations",
+       x = "MAE", y = "R²",
+       colour = "temperature", shape = "top_p") 
+
+# add global best MAE point (orange）+ global best R^2 point (blue)
+p_scatter_mae_r2 <- p_scatter_mae_r2 +
+  geom_point(data = best_mae,
+             aes(x = mae, y = r2),
+             shape = 21, size = 5, stroke = 1.2,
+             colour = "#E69F00", fill = NA) +
+  geom_point(data = best_r2,
+             aes(x = mae, y = r2),
+             shape = 22, size = 5, stroke = 1.2,
+             colour = "blue", fill = NA) +
+  geom_text_repel(data = best_mae,
+                  aes(x = mae, y = r2,
+                  label = paste0("Best MAE: \ntemp=", temperature,
+                                 ", \ntop_p=", top_p,
+                                 ", \ntop_k=", top_k)),
+            nudge_y = -0.2, nudge_x = 0.05, fontface = "bold",
+            size = 5, colour = "#E69F00", segment.color = "#E69F00") +
+  geom_text_repel(data = best_r2,
+                 aes(x = mae, y = r2,
+                     label = paste0("Best R²: \ntemp=", temperature,
+                                    ", \ntop_p=", top_p,
+                                    ", \ntop_k=", top_k)),
+            nudge_y = 0, nudge_x = 1, fontface = "bold",
+            size = 5, colour = "blue", segment.color = "blue") +
+  theme_bw(base_size = 12) +
+  theme(
+    axis.title.x = element_text(size = 20, face = "bold"),
+    axis.title.y = element_text(size = 20, face = "bold"),
+    axis.text.x  = element_text(size = 18),
+    axis.text.y  = element_text(size = 18),
+    strip.text   = element_text(size = 18, face = "bold"),
+    legend.title = element_text(size = 18, face = "bold"),
+    legend.text  = element_text(size = 16)
+  )
+
+p_scatter_mae_r2
+```
+
+### 3) Barchart - proportion of predictions within ±5/±10 points 
+
+```{r p3, fig.width=12, fig.height=8}
+# Fig.3: proportion of predictions within ±5 / ±10 points
+library(tidyr)
+
+df_within <- summary_metrics %>%
+  select(top_k, top_p, temperature, within_5, within_10) %>%
+  pivot_longer(cols = c(within_5, within_10),
+               names_to = "metric", values_to = "value")
+
+p_within <- ggplot(df_within,
+                   aes(x = factor(top_p), y = value, fill = metric)) +
+  geom_col(position = position_dodge(width = 0.8), colour = "black", width = 0.7, alpha = 0.4) +
+  facet_grid(temperature ~ top_k,
+             labeller = labeller(top_k = function(x) paste0("top_k=", x),
+                                 temperature = label_both)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_manual(values = c("within_5" = "#1f78b4", "within_10" = "#e31a1c"),
+                    labels = c("±5", "±10")) +
+  labs(title = "Proportion of predictions within ±5 / ±10 points",
+       x = "top_p", y = "Proportion", fill = "Tolerance") +
+  theme_bw(base_size = 13) 
+p_within
+```
+
+### 4) Tables of Top 10 parameter combinations
+
+```{r t1}
+# make the best combos tables
+library(tidyverse)
+library(scales)
+library(kableExtra)
+
+# 1) global ranks
+ranked_global <- summary_metrics %>%
+  mutate(
+    r_w10 = min_rank(desc(within_10)),
+    r_w5  = min_rank(desc(within_5)),
+    r_mae = min_rank(mae),
+    r_lat = min_rank(avg_latency),
+    # big weights enforce the priority order (w10 >> w5 >> mae >> latency)
+    rank_total = r_w10*1e6 + r_w5*1e3 + r_mae*10 + r_lat
+  ) %>%
+  arrange(rank_total)
+
+# 2) Global best combo(s) (allow ties) 
+best_global <- ranked_global %>%
+  slice_min(rank_total, n = 1, with_ties = TRUE) %>%
+  select(temperature, top_p, top_k, within_10, within_5, mae)
+# print(best_global)
+
+topN <- ranked_global %>%
+  select(temperature, top_p, top_k, within_10, within_5, mae, avg_latency, rank_total) %>%
+  slice_head(n = 10)
+# print(topN)
+
+topN_fmt <- topN %>%
+  arrange(rank_total) %>%
+  mutate(
+    Rank = row_number(),
+    within_10 = scales::percent(within_10, accuracy = 0.1),
+    within_5  = scales::percent(within_5, accuracy = 0.1),
+    mae = round(mae, 2),
+    avg_latency = round(avg_latency, 2)
+  ) %>%
+  select(Rank, temperature, top_p, top_k,
+         `Within ±10` = within_10,
+         `Within ±5` = within_5,
+         MAE = mae,
+         `Avg Latency (s)` = avg_latency)
+
+kbl(topN_fmt, format = "html", booktabs = TRUE,
+    caption = "Top 10 parameter combinations ranked globally (priority: within ±10 > within ±5 > MAE > latency).") %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  row_spec(1, bold = TRUE, background = "#fff3cd")
+```
+
+### 5) Scatter - Predicted vs True (under global best-performing param set)
+
+```{r p4}
+# Fig.4: Predicted vs True scatter (global best) 
+df_best <- all_results %>%
+  filter(temperature == best_global$temperature,
+         top_p == best_global$top_p,
+         top_k == best_global$top_k)
+
+p_scatter <- ggplot(df_best, aes(x = GroundTruth, y = Prediction)) +
+  geom_point(alpha = 0.3, size = 1.2, colour = "steelblue") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "red") +
+  labs(
+    title = "Predicted vs True Scores (Global Best Combination)",
+    subtitle = paste0("temp=", best_global$temperature,
+                      ", top_p=", best_global$top_p,
+                      ", top_k=", best_global$top_k),
+    x = "True Score (Pitchfork)", y = "Predicted Score"
+  ) +
+  theme_minimal(base_size = 13) 
+p_scatter
+```
+
+### 6) Error distribution under globel best-performing param set
+
+```{r p5}
+# Fig.5: Error distribution (Prediction - Truth) 
+df_best <- df_best %>%
+  mutate(error = Prediction - GroundTruth)
+
+p_error <- ggplot(df_best, aes(x = error)) +
+  geom_histogram(aes(y = ..density..), bins = 40, fill = "skyblue", colour = "black", alpha = 0.7) +
+  geom_density(colour = "darkblue", size = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "red") +
+  labs(
+    title = "Error Distribution (Prediction – Truth)",
+    subtitle = paste0("Global Best: temp=", best_global$temperature,
+                      ", top_p=", best_global$top_p,
+                      ", top_k=", best_global$top_k),
+    x = "Error (Prediction – Truth)", y = "Density"
+  ) +
+  theme_minimal(base_size = 13)
+p_error
+```
+

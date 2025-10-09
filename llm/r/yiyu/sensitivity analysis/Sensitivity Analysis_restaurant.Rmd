@@ -154,7 +154,7 @@ split_batches <- function(data, batch_size) {
 
 # API configuration
 url <- "https://api.together.xyz/v1/chat/completions"
-api_key <- 'da73c936b6357c03eb0f8cdc9a7db6ff7ff4e4c117cdca8b76504b87ac6d60c1'
+api_key <- api_key <- Sys.getenv("TOGETHER_API_KEY")
 
 # Batch-level execution function
 run_batch <- function(batch_reviews, param_row, batch_index, log_file = LOG_FILE) {
@@ -353,7 +353,7 @@ compute_metrics_from_vecs <- function(y_true, y_pred) {
     specificity <- rec_neg
     bal_acc <- mean(c(rec_pos, specificity), na.rm = TRUE)
     
-    # ⚠️ cast to numeric to avoid integer overflow
+    # cast to numeric to avoid integer overflow
     denom <- sqrt(as.numeric(tp + fp) * as.numeric(tp + fn) *
                     as.numeric(tn + fp) * as.numeric(tn + fn))
     mcc <- ifelse(denom == 0, NA_real_, ((tp * tn) - (fp * fn)) / denom)
@@ -404,7 +404,9 @@ metrics_df <- results_df %>%
 write_csv(metrics_df, "restaurant_tuning_metrics.csv")
 ```
 
-# Visualization
+# Visualization 
+### 1) Accuracy across batch size & temperature
+
 ```{r p1}
 # load data
 metrics_df <- read_csv("restaurant_tuning_metrics.csv")
@@ -435,6 +437,7 @@ p1 <- metrics_df %>%
 p1
 ```
 
+### 2) Macro F1 by batch size & top_p
 
 ```{r p2}
 # p2 - macro f1 vs. batch size & top_p
@@ -457,6 +460,8 @@ p2 <- metrics_df %>%
   theme_bw(base_size = 12)
 p2
 ```
+
+### 3) Accuracy Heatmap across parameter combinations
 
 ```{r p3a-plot, fig.width=12, fig.height=8}
 # p3 - heatmap: accuravy vs (top_k, max_tokens, batch_size)
@@ -487,6 +492,8 @@ p3_a <- metrics_df %>%
 print(p3_a)
 ```
 
+### 4) Accuracy Heatmap across parameter combinations (faceted by max_tokens)
+
 ```{r p3b-plot, fig.width=12, fig.height=8}
 # p3-B: max_tokens as facet; x = batch_size
 p3_b <- metrics_df %>%
@@ -511,6 +518,8 @@ p3_b <- metrics_df %>%
 
 print(p3_b)
 ```
+
+### 5) Precision vs Recall
 
 ```{r p4}
 # p4 - precision vs recall
@@ -542,6 +551,8 @@ p4 <- metrics_df %>%
 p4
 ```
 
+### 6) Balanced Accuracy vs MCC
+
 ```{r p5}
 # p5 - Balanced Accuracy vs MCC
 p5 <- metrics_df %>%
@@ -554,6 +565,8 @@ p5 <- metrics_df %>%
   theme_bw(base_size = 12)
 p5
 ```
+
+### 7) Average missing rate vs batch size
 
 ```{r p6}
 # p6 - Average Missing Rate vs Batch Size
@@ -569,6 +582,8 @@ p6 <- metrics_df %>%
   theme_bw(base_size = 12)
 p6
 ```
+
+### 8) Failure rate heatmap
 
 ```{r p7, fig.width=12, fig.height=8}
 # p7 - Failure Rate Heatmap

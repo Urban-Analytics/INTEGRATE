@@ -1,7 +1,7 @@
 ---
-title: "Sensitivity Analysis - Music Reviews (Continuous Scoriing)"
+title: "Sensitivity Analysis - Music Reviews (Continuous Scoring)"
 author: "Yiyu Wang"
-date: "`r format(Sys.time(), '%Y-%m-%d')`"
+date: "2025-09-23"
 output:
   html_document:
     df_print: paged
@@ -31,7 +31,7 @@ opts_chunk$set(echo = TRUE, comment="", error=FALSE,
                fig.align="center", message=FALSE, warning=FALSE, tidy = FALSE)
 ```
 
-## LLM-based Analysis for Restaurant, Movie and Music Reviews
+# LLM-based Analysis for Restaurant, Movie and Music Reviews
 ## 1.3 LLM Sensitivity analysis - music reviews (0-100 scoring)
 
 ```{r codeblock}
@@ -199,7 +199,7 @@ parse_scores_continuous <- function(raw_output, n_expected) {
 
 # API config
 url <- "https://api.together.xyz/v1/chat/completions"
-api_key <- 'da73c936b6357c03eb0f8cdc9a7db6ff7ff4e4c117cdca8b76504b87ac6d60c1'
+api_key <- api_key <- Sys.getenv("TOGETHER_API_KEY")
 
 # batch runner
 run_batch_music <- function(batch_reviews, param_row, batch_index, log_file) {
@@ -407,8 +407,8 @@ out_summary <- file.path(base_dir, glue("music_tuning_summary_by_params_{experim
 write_csv(summary_metrics, out_summary)
 ```
 
-# Visualization & Compare param combos
-# 1) Top combos (tables)
+# Visualization
+### 1) Tables: Top 10 parameter combinations
 
 ```{r top_mae}
 set.seed(42)
@@ -446,11 +446,10 @@ top_mae <- summary_df %>%
   arrange(mae, rmse, desc(pearson_r)) %>%
   select(combo_id, temperature, top_p, top_k, max_tokens, batch_size,
          mae, rmse, pearson_r, r2, within_5, within_10, smape, missing_rate, avg_latency) %>%
-  head(15)
+  head(10)
 
 print(top_mae)
 ```
-
 
 ```{r visuals}
 # Multi-objective scoring (tunable weights)
@@ -499,8 +498,8 @@ rank_df %>%
   select(combo_id, temperature, top_p, top_k, max_tokens, batch_size,
          score_composite, mae, rmse, pearson_r, r2, within_5, within_10,
          missing_rate, smape, avg_latency) %>%
-  head(15) %>%
-  print(n = 15)
+  head(10) %>%
+  print(n = 10)
 ```
 
 ```{r pareto}
@@ -530,7 +529,7 @@ pareto_tbl <- summary_df %>%
 print(pareto_tbl, n = nrow(pareto_tbl))
 ```
 
-# 2) Key visuals
+### 2) Scatter: RMSE vs Pearson correlation across param settings
 
 ```{r p1}
 # 1) Scatter: RMSE vs Pearson r (good combos: low RMSE, high corr)
@@ -543,6 +542,8 @@ p_scatter <- summary_df %>%
   theme_bw()
 print(p_scatter)
 ```
+
+### 3) MAE Heatmap over max_tokens & top_k (faceted by temperature & batch size)
 
 ```{r p2, fig.width=12, fig.height=8}
 # 2) Heatmap: MAE over (max_tokens x top_p) faceted by temperature & batch_size
@@ -567,6 +568,8 @@ p_hm <- summary_df %>%
 
 print(p_hm)
 ```
+
+### 4) Main effects: Average MAE by parameter combinations
 
 ```{r p3}
 # 3) Main effects: average MAE by each parameter (quick variance drill)
@@ -597,6 +600,8 @@ p_me <- me_df %>%
 print(p_me)
 ```
 
+### 5) Failure rate heatmap
+
 ```{r p4}
 # 4) Missing rate map (sanity on stability)
 p_miss <- summary_df %>%
@@ -608,6 +613,8 @@ p_miss <- summary_df %>%
   theme_minimal(base_size = 11)
 print(p_miss)
 ```
+
+### 6) Calibration (slope vs intercept) per parameter combinations
 
 ```{r p5}
 # Calibration check per combo
@@ -644,6 +651,8 @@ p_cal <- calib_df %>%
   theme_bw()
 print(p_cal)
 ```
+
+### 7) Bootstrap CIs for parameter combinations (optional)
 
 ```{r p6}
 # Bootstrap CIs for param combos (optional?)
@@ -777,41 +786,3 @@ p_ci <- boot_joined %>%
   theme_bw()
 print(p_ci)
 ```
-
-```{r save, eval=FALSE}
-# ------- Save all plots to a specific folder ---------
-# Tag and directory for plots
-plot_tag <- paste0(experiment_type, "_", scoring_rule_type, "_scoring")
-plot_dir <- file.path(base_dir, paste0("plots_", plot_tag))
-dir.create(plot_dir, recursive = TRUE, showWarnings = FALSE)
-
-# Helper to save a ggplot in PNG + PDF
-save_plot_dual <- function(p, filename, width = 9, height = 6, dpi = 300) {
-  if (inherits(p, "ggplot")) {
-    # PNG
-    ggplot2::ggsave(
-      filename = file.path(plot_dir, paste0(filename, ".png")),
-      plot = p, width = width, height = height, dpi = dpi
-    )
-    # PDF
-    ggplot2::ggsave(
-      filename = file.path(plot_dir, paste0(filename, ".pdf")),
-      plot = p, width = width, height = height, device = "pdf"
-    )
-  }
-}
-
-# Save each plot if it exists
-if (exists("p_scatter")) save_plot_dual(p_scatter, "01_scatter_rmse_vs_pearson", width = 9, height = 6)
-if (exists("p_hm"))      save_plot_dual(p_hm,      "02_heatmap_mae_tokens_by_topP_facet_temp_batch", width = 10, height = 6)
-if (exists("p_me"))      save_plot_dual(p_me,      "03_main_effects_mae", width = 10, height = 6)
-if (exists("p_miss"))    save_plot_dual(p_miss,    "04_heatmap_missing_rate", width = 10, height = 6)
-
-# Optional plots (only save if you created them)
-if (exists("p_cal"))     save_plot_dual(p_cal,     "05_calibration_slope_intercept", width = 8, height = 6)
-if (exists("p_ci"))      save_plot_dual(p_ci,      "06_top10_mae_bootstrap_ci", width = 8, height = 6)
-
-cat("All plots saved to:\n", plot_dir, "\n")
-```
-
-
