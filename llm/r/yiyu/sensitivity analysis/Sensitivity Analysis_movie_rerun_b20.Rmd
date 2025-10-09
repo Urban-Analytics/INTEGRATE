@@ -1,11 +1,11 @@
 ---
 title: "Sensitivity analysis-movie reviews (binary) [rerun]"
 author: "Yiyu Wang"
-date: "`r format(Sys.time(), '%Y-%m-%d')`"
+date: "2025-09-23"
 output:
   html_document:
     df_print: paged
-  word_document: default
+  word_document: defaultss
   pdf_document:
     keep_tex: true
     latex_engine: xelatex
@@ -27,17 +27,15 @@ opts_chunk$set(echo = TRUE, comment="", error=FALSE,
                fig.align="center", message=FALSE, warning=FALSE, tidy = FALSE)
 ```
 
-## 1.2 LLM Sensitivity analysis - movie reviews
-## rerun - batch_size = 20
+# 1.2 LLM Sensitivity analysis - movie reviews
+### rerun - batch_size = 20
 
 ```{r codeblock}
 ### Setup
-suppressPackageStartupMessages({
-  library(tidyverse)
-  library(readr)
-  library(scales)
-  library(glue)
-})
+library(tidyverse)
+library(readr)
+library(scales)
+library(glue)
 ```
 
 ```{r, eval=FALSE}
@@ -64,6 +62,7 @@ write_csv(full_b20_fixed, "llm_results/binary_movie_review_rerun/movie_tuning_su
 ```
 
 # Visualization
+### 1) Accuracy across batch size & temperature
 
 ```{r p1}
 # load data
@@ -94,6 +93,7 @@ p1 <- rerun_b20  %>%
 p1
 ```
 
+### 2) Macro F1 across batch size & top_p
 
 ```{r p2}
 # p2 - Macro F1 vs Batch Size & top_p
@@ -116,6 +116,8 @@ p2 <- rerun_b20  %>%
   theme_bw(base_size = 12)
 p2
 ```
+
+### 3) Accuracy Heatmap across parameter combinations (faceted by batch size)
 
 ```{r p3a-plot, fig.width=12, fig.height=8}
 # p3 - Heatmap of Accuracy
@@ -144,6 +146,8 @@ p3_a <- rerun_b20  %>%
 p3_a
 ```
 
+### 4) Accuracy Heatmap across parameter combinations (faceted by max_tokens)
+
 ```{r p3b-plot, fig.width=12, fig.height=8}
 # p3-B: max_tokens as facet; x = batch_size
 p3_b <- rerun_b20  %>%
@@ -165,6 +169,8 @@ p3_b <- rerun_b20  %>%
         axis.title.y = element_text(size = 14, face = "bold"))
 p3_b
 ```
+
+### 5) Precision vs Recall
 
 ```{r p4}
 # p4 - Precision vs Recall
@@ -202,6 +208,8 @@ p_pr <- rerun_b20  %>%
 print(p_pr)
 ```
 
+### 6) Balanced Accuracy vs MCC
+
 ```{r p5}
 # p5 - Balanced Accuracy vs MCC 
 p5_ba_mcc <- rerun_b20  %>%
@@ -215,6 +223,8 @@ p5_ba_mcc <- rerun_b20  %>%
 
 print(p5_ba_mcc)
 ```
+
+### 7) Barchart: Average missing rate vs batch size
 
 ```{r p6}
 # p6: bar chart - average missing Rate vs Batch Size
@@ -230,6 +240,8 @@ p6_miss <- rerun_b20  %>%
   theme_bw(base_size = 12)
 print(p6_miss)
 ```
+
+### 8) Failure rate heatmap
 
 ```{r p7, fig.width=12, fig.height=8}
 # Failure Rate (Missing Rate) Visualization
@@ -254,7 +266,9 @@ p_fail_full_heat <- rerun_b20  %>%
 print(p_fail_full_heat)
 ```
 
-```{r table}
+### 9) Tables: Top 5 & Bottom 5 parameter combinations
+
+```{r table, echo=FALSE}
 # Tables
 # Select key columns for reporting
 report_cols <- c("temperature", "top_p", "top_k", "max_tokens", "batch_size",
@@ -281,6 +295,8 @@ print(top5)
 cat("\n===== Bottom-5 Worst Parameter Combos (Movie dataset) =====\n")
 print(bottom5)
 ```
+
+### 10) Plot: Top 5 vs Bottom 5 parameter combinations
 
 ```{r p8}
 # plot: top5 vs bottom5 parameter combos
