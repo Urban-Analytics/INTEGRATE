@@ -1,0 +1,243 @@
+---
+title: "LLM review analysis-continuous value"
+author: "Yiyu Wang"
+date: "July 2025"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document:
+    keep_tex: true
+    latex_engine: xelatex
+subparagraph: true
+urlcolor: blue
+linkcolor: black
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{booktabs}
+---
+
+```{r setup, eval = T, echo = F, message=F, warning=F, results='hide'}
+library(knitr)
+library(kableExtra)
+options(width=60)
+opts_chunk$set(echo = TRUE, comment="", error=FALSE, 
+               #cache.lazy = FALSE, 
+               fig.align="center", message=FALSE, warning=FALSE, tidy = FALSE)
+```
+
+## LLM-based Analysis for Restaurant, Movie and Music Reviews
+## PART 2: Continuous value
+## Pitchfork music review analysis (score: 0-100)
+
+```{r packages}
+# Setup
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(reshape2)
+```
+
+```{r continuous scoring, eval = F}
+# load music review data
+pitchfork_data <- read.csv("data/pitchfork_reviews.csv")
+head(pitchfork_data)
+dim(pitchfork_data)
+# Scale the Pitchfork score to 0-100
+pitchfork_data$score_100 <- pitchfork_data$score * 10
+
+# 1. define a prompt
+# Define the system prompt for music review scoring
+music_system_prompt <- "
+You are an expert AI music reviewer, designed to assess and score the quality of music albums, in the style of Pitchfork, based on written reviews. Pitchfork reviews typically score most albums between 60 and 80, with truly exceptional albums sometimes scoring above 90, and very poor albums below 50.
+Please use the full range where appropriate, but avoid clustering all scores near the mean. Do not assign most reviews similar scores - use lower and higher scores when justified by the review content.
+
+Here are some example reviews and their corresponding scores:
+1. ‘A breathtaking, genre-defying album that rewrites the rules of pop music.’ → 96
+2. ‘Though the production is clean, most tracks are uninspired and forgettable.’ → 52
+3. ‘A solid indie rock record with a few standout songs but too much filler.’ → 68
+4. ‘Truly disappointing, lacking any memorable hooks or emotion.’ → 37
+5. ‘Inventive, emotionally resonant, and brilliantly produced.’ → 88
+
+I will provide you with a batch of 20 music reviews. Your task is to analyze the text in each review and assign a Pitchfork-style score from 0 to 100, where 0 is extremely poor, 50 is average level, and 100 is a masterpiece. Specifically: read each review closely and consider the following:
+- Musical quality and innovation
+- Songwriting and lyrics
+- Performance and production
+- Emotional impact
+- Overall impression
+
+You must return exactly 20 scores, one per review, in a structured format.
+The output should be a JSON array of exactly 20 numbers.
+If there are fewer or more than 20 scores, review and correct the response before returning it.
+Example output: [87, 74, 92, 51, 69, ...] (exactly 20 numbers).
+Make sure the JSON array is correctly formatted before returning it.
+Do not explain any reasoning. Do not include any explanations or additional text.
+"
+# 2. Set up API configuration
+url <- "https://api.together.xyz/v1/chat/completions"
+api_key <- Sys.getenv("TOGETHER_API_KEY")
+if (!nzchar(api_key)) {
+  stop("API key not found. Please set with Sys.setenv(TOGETHER_API_KEY='your_real_key')")
+}
+
+# 3. define a function
+# Function to get LLM sentiment scores for restaurant reviews
+get_music_llm_scores = function(batch_reviews, 
+                                batch_index = 1, 
+                                system_prompt = music_system_prompt, 
+                                log_file = LOG_FILE) {
+  
+  review_list <- paste0(seq_along(batch_reviews$review), ". ", batch_reviews$review, collapse = "\n")
+  system_prompted <- paste0(music_system_prompt, "\n\n", review_list)
+  
+  messages <- list(
+    list(role = "system", content = system_prompted)
+  )
+  response <- POST(
+    url,
+    add_headers(
+      Authorization = paste("Bearer", api_key),
+      `Content-Type` = "application/json"
+    ),
+    body = toJSON(list(
+      model = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      messages = messages,
+      max_tokens = 100,  # max length of output (in case it gets the prompt wrong and it talks for ages...)
+      temperature = 0.4, # lower for more deterministic
+      top_p = 0.9,  
+      top_k = 50,  
+      repetition_penalty = 1,
+      stop = list("<|eot_id|>", "<|eom_id|>"),
+      stream = FALSE  # Set to False to get the full response
+    ), auto_unbox = TRUE),
+    encode = "json"
+  )
+  # Convert response to a list
+  response_content = content(response, as = "parsed", type = "application/json")
+  assistant_reply <- str_trim(response_content$choices[[1]]$message$content)
+  
+  # # useful to log during query development
+  log_message <- paste0(batch_index, ": lines n", assistant_reply)
+  write(log_message, file = log_file, append = TRUE)
+  
+  # try the formatting
+  r_vector <- try(fromJSON(assistant_reply), silent = TRUE)
+  if (inherits(r_vector, "try-error")) {
+    scores = rep(NA, nrow(batch_reviews))
+  } else {
+    scores = as.numeric(as.character(r_vector))
+  }
+  return(scores)
+}
+
+# 4. Query the LLM
+# Sample test -20
+set.seed(123)
+test_batch <- pitchfork_data |> sample_n(20)
+# create a log file - create a folder called 'logs' in the working directory 
+LOG_FILE <- file.path("logs", paste0("music_analysis_", format(Sys.time(), "%Y-%m-%d-%H%M%S"), ".log"))
+dir.create("logs", showWarnings = FALSE)
+# then run the LLM
+scores = get_music_llm_scores(test_batch, batch_index = 1, system_prompt = music_system_prompt, log_file = LOG_FILE) 
+scores
+
+# 5. Now, do this is in a loop and in batches - all reviews
+df <- pitchfork_data 
+df$llm_score <- NA
+# log
+LOG_FILE <- file.path("logs", paste0("music_analysis_", format(Sys.time(), "%Y-%m-%d-%H%M%S"), ".log"))
+dir.create("logs", showWarnings = FALSE)
+# batch processing
+batch_size <- 20
+
+for (i in seq(1, nrow(df), by = batch_size)) {
+  # Get the batch of reviews
+  iis = i:min(i + batch_size - 1, nrow(df))
+  batch_reviews <- df[iis, ]
+  scores = NULL
+  scores = get_music_llm_scores(batch_reviews, system_prompt = music_system_prompt, log_file = LOG_FILE) 
+  # check return NA if any missing
+  if (length(scores) == nrow(batch_reviews) & is.numeric(scores)) {
+    df$llm_score[iis] <- scores 
+  } else {
+    df$llm_score[iis] <- NA
+  } 
+  if((i-1) %% 200 == 0) cat(i, "\t")
+}
+
+# get missing scores
+missing_i_list = which(is.na(df$llm_score))
+# make one final pass for those
+if (length(missing_i_list) > 0) {
+  cat("Processing", length(missing_i_list), "missing predictions...\n")
+  
+  for (i in seq(1, length(missing_i_list), by = batch_size)) {
+    # Get the batch of reviews
+    iis = i:min(i + batch_size - 1, length(missing_i_list))
+    iis <- missing_i_list[iis]
+    batch_reviews <- df[iis, ]
+    scores = NULL
+    scores = get_music_llm_scores(batch_reviews, system_prompt = music_system_prompt, log_file = LOG_FILE) 
+    if (length(scores) == nrow(batch_reviews) & is.numeric(scores)) {
+      df$llm_score[iis] <- scores 
+    } else {
+      df$llm_score[iis] <- NA
+    } 
+    if((i-1) %% 10 == 0) cat("Retry processed", i, "reviews\n")
+  }
+}
+# save again
+save(df, file = "llm_results/continuous_music_reviews/music_review_scores.RData")
+# check and if the length is > 0 re-run lines 166 to 184
+length(which(is.na(df$llm_score)))
+```
+
+```{r summary}
+load("llm_results/continuous_music_reviews/music_review_scores.RData")
+# Compare LLM scores to Pitchfork scores
+valid <- !is.na(df$llm_score)
+correlation <- cor(df$llm_score[valid], df$score_100[valid])
+mae <- mean(abs(df$llm_score[valid] - df$score_100[valid]))
+rmse <- sqrt(mean((df$llm_score[valid] - df$score_100[valid])^2))
+# cat("Correlation:", round(correlation, 3), "\n")
+# cat("MAE:", round(mae, 2), "\n")
+# cat("RMSE:", round(rmse, 2), "\n")
+music_llm_scores_matrics <- data.frame(Correlation = correlation,
+                                MAE = mae,
+                                RMSE = rmse,
+                                N = sum(valid))
+music_llm_scores_matrics
+```
+
+```{r}
+## save metrics
+write.csv(music_llm_scores_matrics, "llm_results/continuous_music_reviews/music_pitchfork_score_metrics.csv")
+accuracy_music <- mean(df$llm_score == df$score_100, na.rm = TRUE, row.names = F)
+cat("Overall accuracy:", round(accuracy_music * 100, 2), "%\n")
+```
+
+```{r scatter}
+# scatter plot of LLM vs. actual scores
+p1 <- ggplot(df[valid, ], aes(x = score_100, y = llm_score)) +
+  geom_point(alpha = 0.3) +
+  geom_abline(slope = 1, intercept = 0, color = "tomato", linetype = "dashed") +
+  geom_smooth(method = "loess", se = F, color = "skyblue", linetype = "solid") +
+  labs(x = "Actual Pitchfork Score (0-100)", y = "LLM Predicted Score (0-100)",
+       title = "LLM vs. Actual Pitchfork Scores") +
+  theme_minimal()
+p1
+```
+
+```{r error_hist}
+# error histogram
+df$error <- df$llm_score - df$score_100
+p2 <- ggplot(df[valid, ], aes(x = error)) +
+  geom_histogram(bins = 40, fill = "skyblue", color = "black") +
+  labs(x = "Prediction Error (LLM - Actual)", y = "Count",
+       title = "Distribution of Prediction Errors") +
+  theme_minimal()
+p2
+```
