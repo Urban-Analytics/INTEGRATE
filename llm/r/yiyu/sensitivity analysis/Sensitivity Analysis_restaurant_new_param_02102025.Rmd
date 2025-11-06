@@ -1,0 +1,631 @@
+---
+title: "Sensitivity analysis-restaurant reviews (binary) [new param combos]"
+author: "Yiyu Wang"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document:
+    keep_tex: true
+    latex_engine: xelatex
+subparagraph: true
+urlcolor: blue
+linkcolor: black
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{booktabs}
+---
+
+```{r setup, eval = T, echo = F, message=F, warning=F, results='hide'}
+library(knitr)
+library(kableExtra)
+options(width=60)
+opts_chunk$set(echo = TRUE, comment="", error=FALSE, 
+               #cache.lazy = FALSE, 
+               fig.align="center", message=FALSE, warning=FALSE, tidy = FALSE)
+```
+
+# LLM-based Analysis for Restaurant, Movie and Music Reviews
+## Part 1: Sensitivity analysis - restaurant reviews (binary)
+
+```{r codeblock}
+### Setup
+library(tidyverse)
+library(httr)
+library(jsonlite)
+library(ggplot2)
+library(glue)
+library(dplyr)
+library(purrr)
+library(readr)
+library(stringr)
+library(scales)
+library(viridis)
+```
+
+```{r, eval=FALSE}
+## Load restaurant review data
+restaurant_data <- read.csv("data/restuarant_review_binary.csv")
+restaurant_data <- restaurant_data %>%
+  transmute(id = row_number(),
+            Review = as.character(Review),
+            Liked = as.integer(Liked))
+
+# create a new results directory to avoid overwriting old results.
+base_dir <- "Sensitivity_Analysis_new_prams"
+log_dir <- file.path(base_dir, "logs")
+list_dir <- file.path(base_dir, "results_list", "restaurant_listing")
+result_dir <- file.path(base_dir, "results", "binary_restaurant")
+
+LOG_FILE <- file.path(log_dir, paste0("restaurant_prams_new_", format(Sys.time(), "%Y-%m-%d-%H%M%S"), ".log"))
+dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(list_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(result_dir, recursive = TRUE, showWarnings = FALSE)
+
+
+# function: split into batches
+split_batches <- function(data, batch_size) {
+  split(data, ceiling(seq_len(nrow(data)) / batch_size))
+}
+
+# generate prompt with different batch_size (0-shot example)
+# 1) Dynamically generate the "task text" used in user message
+generate_prompt <- function(batch_size) {
+  glue(
+    "You are an AI designed to assess sentiment in restaurant reviews.
+    I will provide you with a batch of {batch_size} restaurant reviews. 
+    Your task is to analyze each review and determine whether the reviewer liked the restaurant (1) or did not like it (0).
+
+    Specifically: Read each review closely and identify any words, phrases, or sentiments that indicate positive or negative sentiment about the restaurant experience.
+    Consider:
+    - Food quality and taste
+    - Service quality
+    - Atmosphere and ambiance
+    - Value for money
+    - Overall satisfaction
+
+    Assign a score (0 or 1) for each review, where:
+    1 = The reviewer liked the restaurant; 
+    0 = The reviewer did not like the restaurant."
+  )
+}
+
+# 2) Build messages: strict rules in system; task + reviews in user
+build_messages <- function(batch_reviews) {
+  n <- nrow(batch_reviews)
+  
+  sys_msg <- glue(
+    "You are an AI that classifies sentiment in restaurant reviews.
+     The output MUST be a JSON array of 0/1 with exactly {n} integers.
+     No reasoning, no explanations, no labels, no extra text, no trailing commas.
+     Example output: [1, 0, 1, ..., 0] (exactly {n} numbers).
+     If there are fewer or more than {n} scores, correct the response before returning it.
+     Make sure the JSON array is correctly formatted before returning it."
+  )
+  
+  user_msg <- paste0(
+    generate_prompt(n), "\n\n",
+    paste0(seq_along(batch_reviews$Review), ". ", batch_reviews$Review, collapse = "\n")
+  )
+  
+  list(
+    list(role = "system", content = sys_msg),
+    list(role = "user",   content = user_msg)
+  )
+}
+
+# 3) Robustly parse model outputs into a numeric vector of length n_expected
+parse_scores <- function(raw_output, n_expected) {
+  # If reply looks like it was cut before ']', gently try to complete it
+  txt <- trimws(raw_output)
+  if (is.character(txt) && startsWith(txt, "[") && !grepl("\\]$", txt) && nchar(txt) < 20000) {
+    raw_output <- paste0(raw_output, "]")
+  }
+  
+  # 1) Direct JSON parse
+  parsed <- try(jsonlite::fromJSON(raw_output), silent = TRUE)
+  if (!inherits(parsed, "try-error") && is.numeric(parsed)) {
+    scores <- as.numeric(parsed)
+  } else {
+    scores <- NULL
+  }
+  
+  # 2) If failed, extract the first [...] block and parse
+  if (is.null(scores)) {
+    m <- regexpr("\\[[^\\]]*\\]", raw_output, perl = TRUE)
+    if (m[1] != -1) {
+      candidate <- substr(raw_output, m[1], m[1] + attr(m, "match.length") - 1)
+      parsed2 <- try(jsonlite::fromJSON(candidate), silent = TRUE)
+      if (!inherits(parsed2, "try-error") && is.numeric(parsed2)) {
+        scores <- as.numeric(parsed2)
+      }
+    }
+  }
+  
+  # 3) If still failed, extract all 0/1 tokens and truncate to expected length
+  if (is.null(scores)) {
+    toks <- gregexpr("\\b[01]\\b", raw_output, perl = TRUE)
+    if (toks[[1]][1] != -1) {
+      vals <- as.numeric(regmatches(raw_output, toks)[[1]])
+      if (length(vals) >= n_expected) {
+        scores <- vals[seq_len(n_expected)]
+      }
+    }
+  }
+  
+  # 4) Final validation (length & values in {0,1})
+  if (!is.null(scores) &&
+      length(scores) == n_expected &&
+      all(scores %in% c(0, 1))) {
+    return(scores)
+  }
+  
+  # Fallback to all-NA
+  return(rep(NA_real_, n_expected))
+}
+
+# API configuration
+url <- "https://api.together.xyz/v1/chat/completions"
+api_key <- Sys.getenv("TOGETHER_API_KEY")
+
+# Batch-level execution function
+run_batch <- function(batch_reviews, param_row, batch_index, log_file = LOG_FILE) {
+  messages <- build_messages(batch_reviews)
+  scores <- rep(NA_real_, nrow(batch_reviews))  # default fallback
+  
+  # Request body (no stop token; rely on robust parser)
+  body_list <- list(
+    model = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    messages = messages,
+    temperature = param_row$temperature,
+    top_p = param_row$top_p,
+    top_k = param_row$top_k,
+    max_tokens = param_row$max_tokens,
+    stream = FALSE
+  )
+  
+  response <- httr::POST(
+    url,
+    httr::add_headers(Authorization = paste("Bearer", api_key), `Content-Type` = "application/json"),
+    body = jsonlite::toJSON(body_list, auto_unbox = TRUE),
+    encode = "json"
+  )
+  
+  status <- httr::status_code(response)
+  ok <- status == 200
+  
+  # Parse response content (even on error, to capture server message)
+  result <- try(httr::content(response, as = "parsed", type = "application/json"), silent = TRUE)
+  
+  # Extract raw assistant text if present
+  assistant_reply <- NA_character_
+  if (!inherits(result, "try-error") &&
+      !is.null(result$choices) &&
+      length(result$choices) > 0 &&
+      !is.null(result$choices[[1]]$message$content)) {
+    assistant_reply <- stringr::str_trim(result$choices[[1]]$message$content)
+  }
+  
+  # Log HTTP + raw output
+  log_entry <- paste0(
+    "\n--- BATCH ", batch_index, " ---\n",
+    "HTTP STATUS: ", status, "\n",
+    "PARAMS: ", glue("temperature={param_row$temperature}, top_p={param_row$top_p}, top_k={param_row$top_k}, max_tokens={param_row$max_tokens}, batch_size={param_row$batch_size}"), "\n",    
+    "RESPONSE:\n", ifelse(is.na(assistant_reply), "<no assistant content>", assistant_reply), "\n")
+  write(log_entry, file = log_file, append = TRUE)
+  
+  # If HTTP OK and we have assistant content, try robust parsing
+  if (ok && !is.na(assistant_reply)) {
+    parsed_scores <- parse_scores(assistant_reply, nrow(batch_reviews))
+    
+    # Optional one-time retry if too many NA (>50%)
+    if (mean(is.na(parsed_scores)) > 0.5) {
+      messages_retry <- messages
+      messages_retry[[1]]$content <- paste0(messages_retry[[1]]$content,
+                                            "\nIMPORTANT: Output ONLY the JSON array. No other text.")
+      body_list$messages <- messages_retry
+      
+      response2 <- httr::POST(
+        url,
+        httr::add_headers(Authorization = paste("Bearer", api_key), `Content-Type` = "application/json"),
+        body = jsonlite::toJSON(body_list, auto_unbox = TRUE),
+        encode = "json"
+      )
+      result2 <- try(httr::content(response2, as = "parsed", type = "application/json"), silent = TRUE)
+      assistant_reply2 <- NA_character_
+      if (!inherits(result2, "try-error") &&
+          !is.null(result2$choices) &&
+          length(result2$choices) > 0 &&
+          !is.null(result2$choices[[1]]$message$content)) {
+        assistant_reply2 <- stringr::str_trim(result2$choices[[1]]$message$content)
+      }
+      if (!is.na(assistant_reply2)) {
+        parsed_scores <- parse_scores(assistant_reply2, nrow(batch_reviews))
+        write(paste0("Retry used for batch ", batch_index, "\n"), file = log_file, append = TRUE)
+      }
+    }
+    
+    scores <- parsed_scores
+  } else {
+    # HTTP NOT OK: log error message returned by server if present
+    err_text <- try(httr::content(response, as = "text", encoding = "UTF-8"), silent = TRUE)
+    write(paste0("ERROR in batch ", batch_index, ": HTTP ", status, " | ", as.character(err_text), "\n"),
+          file = log_file, append = TRUE)
+  }
+  
+  tibble(
+    id = batch_reviews$id,
+    Review = batch_reviews$Review,
+    GroundTruth = batch_reviews$Liked,
+    Prediction = scores,
+    batch_index = batch_index,
+    temperature = param_row$temperature,
+    top_p = param_row$top_p,
+    top_k = param_row$top_k,
+    max_tokens = param_row$max_tokens,
+    batch_size = nrow(batch_reviews)
+  )
+}
+
+# Parameter combination runner with auto-saving (each combo once)
+run_exp_chunk <- function(dataset, param_chunk, chunk_id = 1) {
+  batch_counter <- 1
+  
+  for (i in 1:nrow(param_chunk)) {
+    param_row <- param_chunk[i, ]
+    param_id <- paste0("chunk", chunk_id, "_param", i)
+    output_file <- glue("{list_dir}/{param_id}.csv")
+    
+    # Skip if already processed (resumable)
+    if (file.exists(output_file)) {
+      cat(glue("Skipping {param_id} (already exists)\n"))
+      next
+    }
+    
+    batches <- split_batches(dataset, param_row$batch_size)
+    cat(glue("\n[Chunk {chunk_id}] Running param set {i}/{nrow(param_chunk)}\n"))
+    combo_results <- vector("list", length(batches))
+    
+    for (b in seq_along(batches)) {
+      result <- run_batch(batches[[b]], param_row, batch_counter)
+      combo_results[[b]] <- result
+      batch_counter <- batch_counter + 1
+    }
+    
+    # Save results for this parameter combination
+    result_df <- bind_rows(combo_results)
+    write_csv(result_df, output_file)
+  }
+}
+
+# New parameter grid
+new_grid <- expand.grid(
+  temperature = c(0.1, 0.3, 0.5, 0.7, 0.9, 1),
+  top_p = c(0.1, 0.3, 0.5, 0.7, 0.9, 1),
+  top_k = c(10, 30, 50, 70, 90, 100),
+  max_tokens = c(100),
+  batch_size = c(10),
+  stringsAsFactors = FALSE
+)
+
+# Split the grid into chunks (manageable groups, e.g., 20 combos per chunk)
+param_chunks <- split(todo_grid, ceiling(seq_len(nrow(todo_grid)) / 20))
+
+# Run each chunk (resumable; you can run a subset if desired)
+for (i in seq_along(param_chunks)) {
+  cat(glue("=== Running parameter chunk {i}/{length(param_chunks)} ===\n"))
+  run_exp_chunk(restaurant_data, param_chunks[[i]], chunk_id = i)
+}
+# Merge all result CSVs into one final file
+all_csvs    <- list.files(list_dir, pattern = "*.csv", full.names = TRUE)
+all_results <- purrr::map_dfr(all_csvs, readr::read_csv, show_col_types = FALSE)
+write_csv(all_results, file.path(result_dir, "restaurant_sensitivity_all_results.csv"))
+
+### calculate metrics
+# Helper: avoid division by zero
+safe_div <- function(a, b) {
+  as.numeric(ifelse(b == 0, NA_real_, a / b))
+}
+
+# Compute metrics per param combo
+compute_metrics_from_vecs <- function(y_true, y_pred) {
+  tryCatch({
+    y_true <- as.numeric(y_true)
+    y_pred <- as.numeric(y_pred)
+    
+    tp <- sum(y_pred == 1 & y_true == 1, na.rm = TRUE)
+    tn <- sum(y_pred == 0 & y_true == 0, na.rm = TRUE)
+    fp <- sum(y_pred == 1 & y_true == 0, na.rm = TRUE)
+    fn <- sum(y_pred == 0 & y_true == 1, na.rm = TRUE)
+    
+    acc <- safe_div(tp + tn, tp + tn + fp + fn)
+    prec_pos <- safe_div(tp, tp + fp)
+    rec_pos  <- safe_div(tp, tp + fn)
+    f1_pos   <- ifelse(is.na(prec_pos) | is.na(rec_pos) | (prec_pos + rec_pos) == 0,
+                       NA_real_, 2 * prec_pos * rec_pos / (prec_pos + rec_pos))
+    
+    # negative class metrics
+    prec_neg <- safe_div(tn, tn + fn)
+    rec_neg  <- safe_div(tn, tn + fp)
+    f1_neg   <- ifelse(is.na(prec_neg) | is.na(rec_neg) | (prec_neg + rec_neg) == 0,
+                       NA_real_, 2 * prec_neg * rec_neg / (prec_neg + rec_neg))
+    
+    macro_f1 <- mean(c(f1_pos, f1_neg), na.rm = TRUE)
+    specificity <- rec_neg
+    bal_acc <- mean(c(rec_pos, specificity), na.rm = TRUE)
+    
+    # cast to numeric to avoid integer overflow
+    denom <- sqrt(as.numeric(tp + fp) * as.numeric(tp + fn) *
+                    as.numeric(tn + fp) * as.numeric(tn + fn))
+    mcc <- ifelse(denom == 0, NA_real_, ((tp * tn) - (fp * fn)) / denom)
+    
+    missing_rate <- mean(is.na(y_pred))
+    
+    tibble(
+      accuracy = acc,
+      precision = prec_pos,
+      recall = rec_pos,
+      f1_pos = f1_pos,
+      f1_neg = f1_neg,
+      macro_f1 = macro_f1,
+      specificity = specificity,
+      balanced_accuracy = bal_acc,
+      mcc = mcc,
+      missing_rate = missing_rate
+    )
+  }, error = function(e) {
+    # return NA if error occur
+    tibble(
+      accuracy = NA_real_,
+      precision = NA_real_,
+      recall = NA_real_,
+      f1_pos = NA_real_,
+      f1_neg = NA_real_,
+      macro_f1 = NA_real_,
+      specificity = NA_real_,
+      balanced_accuracy = NA_real_,
+      mcc = NA_real_,
+      missing_rate = mean(is.na(y_pred))
+    )
+  })
+}
+
+# Apply to restaurant results
+# results_df <- read_csv(file.path(result_dir, "restaurant_sensitivity_all_results_merged.csv"))
+results_df <- combined_results %>% mutate(
+  GroundTruth = as.integer(GroundTruth),
+  Prediction  = as.integer(Prediction)
+)
+metrics_df <- results_df %>%
+  group_by(temperature, top_p, top_k, max_tokens, batch_size) %>%
+  summarise(
+    metrics = list(compute_metrics_from_vecs(GroundTruth, Prediction)),
+    .groups = "drop"
+  ) %>%
+  tidyr::unnest_wider(metrics) %>%
+  mutate(across(where(is.double), ~round(., 4))) %>%
+  arrange(desc(macro_f1 * (1 - missing_rate)), desc(accuracy), desc(mcc))
+
+write_csv(metrics_df, file.path(result_dir, "restaurant_tuning_metrics_new.csv"))
+```
+
+# Visualization
+### 1) Accuracy heatmap across temperature and top_p, faceted by top_k
+
+```{r p1, fig.width=12, fig.height=8}
+# load data
+metrics_df <- read_csv("results/binary_restaurant/restaurant_tuning_metrics_new.csv")
+metrics_df <- metrics_df %>%
+  mutate(top_k = as.integer(top_k),
+         temperature = as.numeric(temperature),
+         top_p = as.numeric(top_p))
+
+# 1) Accuracy Heatmap with global best points
+# temperature x top_p, facet by top_k
+min_acc <- min(metrics_df$accuracy, na.rm = TRUE)
+max_acc <- max(metrics_df$accuracy, na.rm = TRUE)
+
+p_hm_acc <- ggplot(metrics_df, aes(factor(temperature), factor(top_p), fill = accuracy)) +
+  geom_tile(color = "white") +
+  facet_wrap(~ top_k, labeller = label_both) +
+  scale_fill_gradient(low = "#f0f9e8", high = "#0868ac",
+                      limits = c(min_acc, max_acc),
+                      breaks = seq(min_acc, max_acc, length.out = 5),
+                      labels = percent_format(accuracy = 0.01)) +
+  labs(title = "Accuracy heatmap (temperature × top_p, facet by top_k)",
+       x = "temperature", y = "top_p", fill = "Accuracy") +
+  theme_bw(base_size = 12)
+# add global best points
+global_best <- metrics_df %>%
+  filter(accuracy == max(accuracy, na.rm = TRUE))
+
+p_hm_acc_best <- p_hm_acc +
+  geom_point(data = global_best,
+             aes(factor(temperature), factor(top_p)),
+             shape = 21, size = 4,
+             fill = "#E69F00", colour = "#333333", stroke = 1.2) +
+  ggrepel::geom_text_repel(
+    data = global_best,
+    # data = best_acc,
+    aes(factor(temperature), factor(top_p),
+        label = sprintf("Acc=%.1f%%", accuracy*100)),
+    size = 4, fontface = "bold",
+    colour = "white",               
+    box.padding = 0.25, segment.color = "grey30",
+    min.segment.length = 0.05, max.overlaps = 10,
+    bg.color = "black", bg.r = 0.15 
+  ) 
+p_hm_acc_best
+```
+
+```{r Table1, echo=FALSE}
+library(gridExtra)
+
+# Table 1: Best combos by Accuracy (for p1) 
+best_acc <- metrics_df %>%
+  slice_max(order_by = accuracy, n = 1, with_ties = TRUE) %>%
+  select(top_k, temperature, top_p, accuracy, macro_f1) %>%
+  arrange(top_k, temperature, top_p)
+
+table_acc <- best_acc %>%
+  mutate(
+    Accuracy = sprintf("%.3f", accuracy),
+    MacroF1  = sprintf("%.3f", macro_f1)
+  ) %>%
+  select(top_k, temperature, top_p, Accuracy, MacroF1)
+
+p_table_acc <- tableGrob(table_acc, rows = NULL, theme = ttheme_default(
+  core = list(fg_params = list(cex = 0.9)),       
+  colhead = list(fg_params = list(cex = 1.2, fontface = "bold")) 
+))
+grid::grid.newpage()
+grid::grid.draw(p_table_acc)
+```
+
+### 2) Macro-F1 heatmap (temp. * top_p, faceted by top_k)
+
+```{r p2, fig.width=12, fig.height=8}
+# 2) Macro-F1 Heatmap with best points
+# temperature x top_p, facet by top_k
+min_f1 <- min(metrics_df$macro_f1, na.rm = TRUE)
+max_f1 <- max(metrics_df$macro_f1, na.rm = TRUE)
+p_hm_f1 <- ggplot(metrics_df, aes(factor(temperature), factor(top_p), fill = macro_f1)) +
+  geom_tile(color = "white") +
+  facet_wrap(~ top_k, labeller = label_both) +
+  scale_fill_gradient(low = "#f7fcf0", high = "#00441b",
+                      limits = c(min_f1, max_f1),
+                      breaks = seq(min_f1, max_f1, length.out = 5),
+                      labels = percent_format(accuracy = 1)) +
+  labs(title = "Macro-F1 heatmap (temperature × top_p, facet by top_k)",
+       x = "temperature", y = "top_p", fill = "Macro-F1") +
+  theme_bw(base_size = 12)
+
+# add global best points
+global_best_f1 <- metrics_df %>%
+  filter(macro_f1 == max(macro_f1, na.rm = TRUE))
+
+p_hm_f1_best <- p_hm_f1 +
+  geom_point(data = global_best_f1,
+             aes(factor(temperature), factor(top_p)),
+             shape = 21, size = 4,
+             fill = "#E69F00", colour = "#333333", stroke = 1.2) +
+  ggrepel::geom_text_repel(
+    data = global_best_f1,
+    aes(factor(temperature), factor(top_p),
+        label = sprintf("F1=%.1f%%", macro_f1*100)),
+    size = 4, fontface = "bold",
+    colour = "white",                   
+    box.padding = 0.25, segment.color = "grey30",
+    min.segment.length = 0.05, max.overlaps = 10,
+    bg.color = "black", bg.r = 0.15    
+  ) 
+p_hm_f1_best 
+```
+
+```{r table2, echo=FALSE}
+# Table 2: Best combos by Macro-F1 (for p2) 
+best_f1 <- metrics_df %>%
+  slice_max(order_by = macro_f1, n = 1, with_ties = TRUE) %>%
+  select(top_p, temperature, top_k, accuracy, macro_f1) %>%
+  arrange(top_p, temperature, top_k)
+
+table_f1 <- best_f1 %>%
+  mutate(
+    Accuracy = sprintf("%.3f", accuracy),
+    MacroF1  = sprintf("%.3f", macro_f1)
+  ) %>%
+  select(top_k, temperature, top_p, Accuracy, MacroF1)
+
+p_table_f1 <- tableGrob(table_f1, rows = NULL, theme = ttheme_default(
+  core = list(fg_params = list(cex = 0.9)),
+  colhead = list(fg_params = list(cex = 1.2, fontface = "bold"))
+))
+grid::grid.newpage()
+grid::grid.draw(p_table_f1)
+```
+
+### 3) Scatter plot (Accuracy vs Macro-F1, size = MCC)
+
+```{r p3a, fig.width=12, fig.height=11}
+# p3: Accuracy vs Macro-F1  
+# version A: MCC version
+library(patchwork)
+
+# 1). find the global best points
+best_combos <- metrics_df %>%
+  mutate(composite = accuracy * macro_f1) %>%
+  slice_max(order_by = composite, n = 1, with_ties = TRUE) %>%
+  select(top_p, temperature, top_k, accuracy, macro_f1) %>%
+  arrange(top_p, top_k)
+
+# 2). plot with best-performing parameter sets highlighted, without text
+p_main <- ggplot(metrics_df, aes(x = macro_f1, y = accuracy)) +
+  geom_point(aes(size = mcc, colour = factor(top_k)), alpha = 0.7) +
+  facet_wrap(~ top_p, labeller = label_both) +
+  geom_point(data = best_combos,
+             aes(x = macro_f1, y = accuracy),
+             shape = 21, size = 6, stroke = 1.5, 
+             colour = "#E69F00", fill = NA) +
+  scale_colour_viridis_d(begin = 1, end = 0, name = "top_k") +
+  scale_size(range = c(2,6), name = "MCC") +
+  scale_x_continuous(labels = scales::percent_format(accuracy=0.1), limits = c(0.98,1)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy=0.1), limits = c(0.98,1)) +
+  labs(
+    title = "Accuracy vs Macro-F1 across parameter sets",
+    x = "Macro-F1", y = "Accuracy"
+  )
+
+# 3). table of best param combos
+best_table <- best_combos %>%
+  mutate(
+    Accuracy = sprintf("%.3f", accuracy),
+    MacroF1  = sprintf("%.3f", macro_f1)
+  ) %>%
+  select(top_p, temperature, top_k, Accuracy, MacroF1) %>%
+  arrange(top_p, temperature, top_k)  
+
+p_table <- tableGrob(best_table, rows = NULL, theme = ttheme_default(
+  core = list(fg_params = list(cex = 1.2)),
+  colhead = list(fg_params = list(cex = 1.4, fontface = "bold"))
+))
+
+# 4). combine
+p_tradeoff_MMC_combined <- p_main / p_table + plot_layout(heights = c(3,1))
+p_tradeoff_MMC_combined 
+```
+
+### 4) Scatter plot with jitter (same as p3a, but jittered)
+
+```{r p3b, fig.width=12, fig.height=11}
+# version b: jitter version
+# Jittered version (recommended for readability; size = MCC)
+set.seed(42)  # reproducible jitter
+
+p_tradeoff_jitter <- ggplot(metrics_df, aes(x = macro_f1, y = accuracy)) +
+  # jitter to separate almost-identical points without changing their meaning
+  geom_jitter(aes(size = mcc, colour = factor(top_k)),
+              width = 0.0005, height = 0.0005, alpha = 0.65, stroke = 0) +
+  facet_wrap(~ top_p, labeller = label_both) +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 0.1), limits = c(0.98, 1)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1), limits = c(0.98, 1)) +
+  # ordered categorical palette for top_k to suggest progression
+  scale_colour_viridis_d(begin = 1, end = 0, name = "top_k") +
+  scale_size(name = "MCC", range = c(2, 6)) +
+  labs(
+    x = "Macro-F1", y = "Accuracy",
+    title = "Accuracy vs Macro-F1 across parameter sets (jittered; size = MCC)"
+  ) +
+  theme_bw(base_size = 12) +
+  # highlight the global best configuration
+    geom_point(data = best_combos,
+             aes(x = macro_f1, y = accuracy),
+             shape = 21, size = 6, stroke = 1.5, 
+             colour = "#E69F00", fill = NA) 
+
+p_tradeoff_jitter_combined <- p_tradeoff_jitter / p_table + plot_layout(heights = c(3,1))
+p_tradeoff_jitter_combined 
+```
+
+

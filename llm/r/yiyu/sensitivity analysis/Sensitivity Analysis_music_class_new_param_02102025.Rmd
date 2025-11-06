@@ -1,0 +1,1050 @@
+---
+title: "Sensitivity Analysis - Music classification [0.4 step]"
+author: "Yiyu Wang"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document:
+    keep_tex: true
+    latex_engine: xelatex
+subparagraph: true
+urlcolor: blue
+linkcolor: black
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{booktabs}
+---
+```{r setup, eval = T, echo = F, message=F, warning=F, results='hide'}
+library(knitr)
+library(kableExtra)
+options(width=60)
+opts_chunk$set(echo = TRUE, comment="", error=FALSE, 
+               #cache.lazy = FALSE, 
+               fig.align="center", message=FALSE, warning=FALSE, tidy = FALSE)
+```
+
+# LLM-based Analysis for Restaurant, Movie and Music Reviews
+## Part 2: Sensitivity Analysis - music 0-100 scoring
+
+```{r codeblock, echo=FALSE}
+## Setup
+library(tidyverse)
+library(dplyr)
+library(httr)
+library(jsonlite)
+library(glue)
+library(stringr)
+library(readr)
+library(kableExtra)
+library(ggplot2)
+```
+
+```{r, eval=FALSE}
+## Directories
+base_dir <- "Sensitivity_Analysis_new_prams"
+log_dir <- file.path(base_dir, "logs", "logs_music_genre")
+result_dir <- file.path(base_dir, "results", "music_class")
+
+dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(result_dir, recursive = TRUE, showWarnings = FALSE)
+
+## Define reduced multi-class mapping
+## maps 9 genres to 5 broader classes
+genre_map <- list(
+  'rock/metal' = c('rock', 'metal'),
+  'pop/r&b' = c('pop/r&b'),
+  'electronic/experimental' = c('electronic', 'experimental'),
+  'folk/country/global/jazz' = c('folk/country', 'global', 'jazz'),
+  'rap' = c('rap')
+)
+
+# Helper: map original genre to reduced class
+genre_reduce <- function(genre) { 
+  g <- tolower(trimws(genre))
+  for (k in names(genre_map)) {
+    if (g %in% genre_map[[k]]) return(k)
+  }
+  return(NA_character_)
+}
+
+# load data
+music_data <- read.csv("data/pitchfork_reviews.csv") %>%
+  transmute(
+    id = reviewid,
+    review = as.character(review),
+    genre_reduced = factor(
+      sapply(genre, genre_reduce),
+      levels = c("rock/metal","pop/r&b","electronic/experimental","folk/country/global/jazz","rap")
+    )
+  ) %>%
+  filter(!is.na(genre_reduced))
+
+# check reduced classes
+reduced_classes <- levels(music_data$genre_reduced)
+print(reduced_classes)
+table(music_data$genre_reduced, useNA = "ifany")
+
+## Sample few-shot example
+set.seed(42)
+few_shot_examples <- list()
+few_shot_indices <- c()
+for (genre_class in names(genre_map)) {
+  examples <- music_data%>% 
+    filter(genre_reduced == genre_class) %>%
+    sample_n(min(3, n()))
+  few_shot_examples[[genre_class]] <- examples
+  few_shot_indices <- c(few_shot_indices, examples$id)
+}
+# remove few-shot examples from dataset
+test_data <- music_data[-few_shot_indices, ]
+rm(music_data)
+
+## Define a prompt
+## build with real examples
+example_texts <- c()
+for (genre_class in names(few_shot_examples)) {
+  for (i in 1:nrow(few_shot_examples[[genre_class]])) {
+    review_text<- few_shot_examples[[genre_class]]$review[i]
+    example_texts <- c(example_texts, sprintf("Review: '%s'\nGenre: %s", review_text, genre_class))
+  }
+}
+examples_block <- paste(example_texts, collapse = "\n\n")
+
+music_genre_prompt <- function(batch_size, examples_block, reduced_classes) {
+  glue(
+    "You are an expert AI music reviewer, designed to classify each music album review into ONE AND ONLY ONE of the following 5 genres:\n",
+    "[{paste(reduced_classes, collapse=',')}].\n\n",
+    "Below are some example reviews and their corresponding genres:\n",
+    "{examples_block}\n\n",
+    "I will provide you with a batch of {batch_size} music reviews. Read each review closely and identify any words, phrases, or sentiments that might indicate the genre of the album. Then, assign ONE of 5 genres listed above to each review.\n",
+  )
+}
+
+build_messages_music_class <- function(batch_reviews, examples_block, reduced_classes) {
+  n <- nrow(batch_reviews)
+  sys_msg <- glue(
+    "You are an expert AI that classifies music reviews into genres.\n",
+    "RULES:\n",
+    "- Only use these 5 genres: [{paste(reduced_classes, collapse=',')}]. If your answer is not exactly one of these, review and correct before returning it.\n",
+    "- NEVER invent new genres, combine genres, or use subgenres or variations.\n",
+    "- If multiple fit, choose the most dominant one; if unsure, choose the closest.\n",
+    "- Output MUST be a valid JSON array of exactly {n} genres, one per review, in a structured format.\n",
+    "- No reasoning, no explanations, no labels, no extra text.\n",
+    "- Example output: [\"rap\", \"rock/metal\", \"folk/country/global/jazz\", \"pop/r&b\", ...].\n",
+    "- Your output must contain exactly {n} genres.",
+    "- If there are fewer or more than {n} genres, review and correct the response before returning it.",
+    "- Make sure the JSON array is correctly formatted before returning it."
+  )
+  user_msg <- paste0(
+    music_genre_prompt(n, examples_block, reduced_classes), "\n\n",
+    "Classify the following reviews:\n",
+    jsonlite::toJSON(
+      lapply(seq_len(n), function(i) list(id = batch_reviews$id[i], text = batch_reviews$review[i])),
+      auto_unbox = TRUE, pretty = TRUE
+    )
+  )
+  
+  list(
+    list(role = "system", content = sys_msg),
+    list(role = "user", content = user_msg)
+  )
+}
+
+## Output Parsing Helpers
+safe_json_parse <- function(txt) {
+  tryCatch(jsonlite::fromJSON(txt), error = function(e) NULL)
+}
+
+## Split batches
+split_batches <- function(data, batch_size) {
+  split(data, ceiling(seq_len(nrow(data)) / batch_size))
+}
+
+# API config
+url <- "https://api.together.xyz/v1/chat/completions"
+api_key <- Sys.getenv("TOGETHER_API_KEY")
+if (!nzchar(api_key)) {
+  stop("API key not found. Please set with Sys.setenv(TOGETHER_API_KEY='your_real_key')")
+}
+
+# batch runner for music genre classification
+# if log_all = T, all status will be recorded.
+run_batch_music_genre <- function(batch_reviews, param_row, batch_index, log_file,
+                                  examples_block, reduced_classes, log_all = FALSE) {
+  # build messages (system + user)
+  messages <- build_messages_music_class(batch_reviews, examples_block, reduced_classes)
+  n <- nrow(batch_reviews)
+  
+  body_list <- list(
+    model = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    messages = messages,
+    temperature = param_row$temperature,
+    top_p = param_row$top_p,
+    top_k = param_row$top_k,
+    repetition_penalty = param_row$repetition_penalty,
+    max_tokens = param_row$max_tokens,
+    stream = FALSE
+  )
+  
+  t0 <- Sys.time()
+  response <- httr::POST(
+    url,
+    httr::add_headers(Authorization = paste("Bearer", api_key),
+                      `Content-Type` = "application/json"),
+    body = body_list,
+    encode = "json"
+  )
+  t1 <- Sys.time()
+  latency_sec <- as.numeric(difftime(t1, t0, units = "secs"))
+  status <- tryCatch(httr::status_code(response), error = function(e) NA_integer_)
+  
+  result <- try(httr::content(response, as = "parsed", type = "application/json"), silent = TRUE)
+  
+  assistant_reply <- NA_character_
+  if (!inherits(result, "try-error") && !is.null(result$choices)) {
+    assistant_reply <- paste(result$choices[[1]]$message$content, collapse = " ")
+    assistant_reply <- str_trim(assistant_reply)
+  }
+  
+  # parse classification output
+  parsed_labels <- rep(NA_character_, n)
+  if (!is.na(assistant_reply)) {
+    out <- safe_json_parse(assistant_reply)
+    if (!is.null(out) && length(out) == n) {
+      parsed_labels <- tolower(trimws(as.character(out)))
+      parsed_labels[!parsed_labels %in% tolower(reduced_classes)] <- NA_character_
+    }
+  }
+  
+  # logging
+  if (!is.null(log_file)) {
+    na_rate <- mean(is.na(parsed_labels))
+    if (log_all || status != 200 || na_rate > 0) {
+    # if (isTRUE(status != 200) || na_rate > 0) { 
+      head_txt <- substr(as.character(assistant_reply), 1, 300)
+      msg <- paste0(
+        "[batch ", batch_index, "] status=", status,
+        " | latency=", round(latency_sec, 2), "s",
+        " | NA_rate=", round(na_rate, 3),
+        " | params={temp=", param_row$temperature,
+        ", top_p=", param_row$top_p,
+        ", top_k=", param_row$top_k,
+        ", max_tokens=", param_row$max_tokens,
+        ", batch_size=", param_row$batch_size, "}",
+        " | reply_head=", head_txt
+      )
+      write(paste0(msg, "\n"), file = log_file, append = TRUE)
+    }
+  }
+  
+  tibble(
+    dataset = "music_genre",
+    id = batch_reviews$id,
+    Review = batch_reviews$review,
+    GroundTruth = batch_reviews$genre_reduced,
+    Prediction = parsed_labels,
+    batch_index = batch_index,
+    latency_sec = latency_sec,
+    temperature = param_row$temperature,
+    top_p = param_row$top_p,
+    top_k = param_row$top_k,
+    repetition_penalty = param_row$repetition_penalty,
+    max_tokens = param_row$max_tokens,
+    batch_size = n
+  )
+}
+
+# experiment runner for music genre classification
+run_exp_chunk_music_genre <- function(dataset, param_chunk, chunk_id = 1,
+                                      examples_block, reduced_classes) {
+  batch_counter <- 1
+  for (i in 1:nrow(param_chunk)) {
+    param_row <- param_chunk[i, ]
+    param_id <- paste0("chunk", chunk_id, "_param", i)
+    output_file <- file.path(result_dir, paste0(param_id, ".csv"))
+    
+    if (file.exists(output_file)) next
+    
+    LOG_FILE <- file.path(
+      log_dir,
+      glue("music_genre_sensitivity_{param_id}_{format(Sys.time(), '%Y-%m-%d-%H%M%S')}.log")
+    )
+    
+    batches <- split_batches(dataset, param_row$batch_size)
+    
+    for (b in seq_along(batches)) {
+      res_b <- run_batch_music_genre(
+        batch_reviews = batches[[b]],
+        param_row = param_row,
+        batch_index = batch_counter,
+        log_file = LOG_FILE,
+        examples_block = examples_block,
+        reduced_classes = reduced_classes
+      )
+      
+      if (b == 1) {
+        write_csv(res_b, output_file)
+      } else {
+        write_csv(res_b, output_file, append = TRUE)
+      }
+      batch_counter <- batch_counter + 1
+      Sys.sleep(0.2)
+    }
+  }
+}
+
+# Run experiment
+# New parameter grid
+new_grid <- expand.grid(
+  temperature = c(0.1, 0.5, 1),
+  top_p = c(0.1, 0.5, 1),
+  top_k = c(10, 50, 100),
+  max_tokens = c(200),
+  batch_size = c(10),
+  stringsAsFactors = FALSE
+)
+
+# split grid into chunks
+param_chunks <- split(new_grid, ceiling(seq_len(nrow(new_grid)) / 10))
+
+## Runn experiments - full dataset
+for (i in seq_along(param_chunks)) {
+  cat(glue("=== Running chunk {i}/{length(param_chunks)} ===\n"))
+  run_exp_chunk_music_genre(test_data, param_chunks[[i]], chunk_id = i,
+                            examples_block = examples_block,
+                            reduced_classes = reduced_classes)
+}
+
+# merge all result CSVs into one final file
+all_csvs <- list.files(result_dir, pattern = "^chunk.*\\.csv$", full.names = TRUE)
+all_results <- purrr::map_dfr(all_csvs, read_csv, show_col_types = FALSE)
+write_csv(all_results, file.path(result_dir, "music_class_sensitivity_all_results.csv"))
+
+# Function to check NA rate in Prediction column
+check_missing_rate <- function(df) {
+  if (!"Prediction" %in% colnames(df)) {
+    stop("No column named 'Prediction' in the dataframe")
+  }
+
+  total <- nrow(df)
+  missing <- sum(is.na(df$Prediction))
+  rate <- missing / total * 100
+
+  cat("Total rows: ", total, "\n")
+  cat("Missing Predictions: ", missing, "\n")
+  cat("Missing rate: ", round(rate, 2), "%\n")
+
+  return(invisible(rate))
+}
+
+check_missing_rate(all_results)
+check_1 <- read_csv(file.path(result_dir, "chunk1_param10.csv"))
+check_missing_rate(check_1)
+
+# # Directory for rerun results
+# rerun_results_dir <- file.path(base_dir, "results", "music_class_rerun")
+# rerun_log_dir <- file.path(log_dir, "rerun_logs")
+# dir.create(rerun_results_dir, recursive = TRUE, showWarnings = FALSE)
+# dir.create(rerun_log_dir, recursive = TRUE, showWarnings = FALSE)
+
+# 1) Parse log files to identify failed batches
+get_failed_batches <- function(log_dir) {
+  # 1) list all log files
+  log_files <- list.files(log_dir, full.names = TRUE, pattern = "\\.log$")
+  
+  # 2) parse each file
+  all_entries <- lapply(log_files, function(f) {
+    lines <- readLines(f)
+    tibble(file = basename(f), line = lines)
+  }) %>% bind_rows()
+  
+  # 3) extract fields from each line
+  log_df <- all_entries %>%
+    mutate(
+      # param_id is encoded in the filename: "chunkX_paramY..."
+      param_id = str_extract(file, "chunk\\d+_param\\d+"),
+      batch_index = str_extract(line, "\\[batch\\s*\\d+\\]"),
+      batch_index = as.integer(str_replace_all(batch_index, "\\D", "")),
+      status = str_extract(line, "status=\\d+"),
+      status = as.integer(str_replace(status, "status=", "")),
+      na_rate = str_extract(line, "NA_rate=\\d+\\.?\\d*"),
+      na_rate = as.numeric(str_replace(na_rate, "NA_rate=", "")),
+      params = str_extract(line, "params=\\{.*?\\}"),
+      reply_head = str_extract(line, "reply_head=.*$")
+    )
+  
+  # 4) keep only failed batches
+  failed_batches <- log_df %>%
+    filter(status %in% c(402, 500, 502, 503)) %>%
+    select(param_id, batch_index, status, na_rate, params, reply_head, file)
+  
+  return(failed_batches)
+}
+
+# rerun function
+rerun_failed_batches <- function(failed_batches,
+                                 dataset,
+                                 examples_block,
+                                 reduced_classes,
+                                 round_id = 1,
+                                 base_dir = "Sensitivity_Analysis_new_prams",
+                                 log_dir = file.path(base_dir, "logs", "logs_music_genre") 
+                                 ) {
+  # Define round-specific directories
+  rerun_results_dir <- file.path(base_dir, "results", paste0("music_class_rerun_round", round_id))
+  rerun_log_dir <- file.path(log_dir, paste0("rerun_logs_round", round_id))
+  dir.create(rerun_results_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(rerun_log_dir, recursive = TRUE, showWarnings = FALSE) 
+  
+  rerun_results <- list()
+  
+  for (i in seq_len(nrow(failed_batches))) {
+    pid <- failed_batches$param_id[i]
+    bidx <- failed_batches$batch_index[i]
+    
+    # Parse chunk and param index from param_id
+    m <- stringr::str_match(pid, "chunk(\\d+)_param(\\d+)")
+    chunk <- as.integer(m[,2])
+    param <- as.integer(m[,3])
+    
+    # Rebuild parameter row
+    param_row <- param_chunks[[chunk]][param, , drop = FALSE]
+    
+    # Split dataset into batches
+    batches <- split_batches(dataset, param_row$batch_size)
+    if (bidx > length(batches)) {
+      warning("Batch index out of range for ", pid, " batch=", bidx)
+      next
+    }
+    
+    cat("Re-running", pid, "batch", bidx, "\n")
+    
+    # Round-specific log file
+    log_file <- file.path(
+      rerun_log_dir,
+      glue("{pid}_batch{bidx}_round{round_id}_{format(Sys.time(), '%Y-%m-%d-%H%M%S')}.log")
+    )
+    
+    # Run batch
+    res_b <- run_batch_music_genre(
+      batch_reviews = batches[[bidx]],
+      param_row = param_row,
+      batch_index = bidx,
+      log_file = log_file,  # now logs saved separately
+      examples_block = examples_block,
+      reduced_classes = reduced_classes
+    )
+    
+    # Save each batch result into rerun_results_dir
+    out_file <- file.path(rerun_results_dir, glue("{pid}_batch{bidx}.csv"))
+    write_csv(res_b, out_file)
+    rerun_results[[i]] <- res_b
+  }
+  
+  # Merge results for this round
+  rerun_all <- bind_rows(rerun_results)
+  out_file <- file.path(rerun_results_dir, glue("music_class_sensitivity_failed_rerun_round{round_id}.csv"))
+  write_csv(rerun_all, out_file)
+  
+  message("Rerun round ", round_id, " complete.",
+          "\nResults: ", rerun_results_dir,
+          "\nLogs: ", rerun_log_dir)
+  return(rerun_all)
+}
+
+# # first rerun
+# failed_batches_round1 <- get_failed_batches("Sensitivity_Analysis_new_prams/logs/logs_music_genre")
+# rerun_all_round1 <- rerun_failed_batches(
+#   failed_batches_round1,
+#   test_data,
+#   examples_block,
+#   reduced_classes,
+#   round_id = 1
+# )
+# failed_batches <- get_failed_batches(log_dir)
+# head(failed_batches, 10)
+# rerun_all <- rerun_failed_batches(failed_batches, test_data, examples_block, reduced_classes)
+
+# second rerun
+failed_batches_round2 <- get_failed_batches(file.path(log_dir, "rerun_logs_round1"))
+head(failed_batches_round2, 10)
+rerun_all_round2 <- rerun_failed_batches(failed_batches_round2, 
+                                         test_data, 
+                                         examples_block, 
+                                         reduced_classes,
+                                         round_id = 2)
+
+# Collect all rerun results from multiple rounds
+collect_all_rerun_results <- function(base_dir, max_rounds = 5) {
+  rerun_results_list <- list()
+  
+  for (r in seq_len(max_rounds)) {
+    rerun_results_dir <- file.path(base_dir, "results", paste0("music_class_rerun_round", r))
+    rerun_file <- file.path(rerun_results_dir, paste0("music_class_sensitivity_failed_rerun_round", r, ".csv"))
+    
+    if (file.exists(rerun_file)) {
+      message("Found rerun results for round ", r, ": ", rerun_file)
+      rerun_results_list[[r]] <- readr::read_csv(rerun_file, show_col_types = FALSE)
+    }
+  }
+  
+  if (length(rerun_results_list) == 0) {
+    stop("No rerun results found in ", base_dir)
+  }
+  
+  rerun_results_all <- dplyr::bind_rows(rerun_results_list, .id = "round")
+  return(rerun_results_all)
+}
+
+
+# merge all results
+all_results <- read_csv(file.path(result_dir, "music_class_sensitivity_all_results.csv"))
+
+merge_rerun_with_all_results <- function(all_results, 
+                                         rerun_results, 
+                                         base_dir = "Sensitivity_Analysis_new_prams",
+                                         output_file = NULL,
+                                         verbose = TRUE) {
+  # Build unique key for matching
+  all_results <- all_results %>%
+    mutate(key = paste(id, temperature, top_p, top_k, batch_size, max_tokens, sep = "_"))
+  rerun_results <- rerun_results %>%
+    mutate(key = paste(id, temperature, top_p, top_k, batch_size, max_tokens, sep = "_"))
+  
+  # keep the last round if the batch was rerun several times
+  if ("round" %in% names(rerun_results)) {
+    rerun_results <- rerun_results %>%
+      arrange(key, desc(as.integer(round))) %>%
+      distinct(key, .keep_all = TRUE)
+  }
+
+  # Get keys where Prediction is NA in all_results
+  na_keys <- all_results %>%
+    filter(is.na(Prediction)) %>%
+    pull(key)
+  
+  # Filter rerun results to only those keys
+  rerun_filtered <- rerun_results %>%
+    filter(key %in% na_keys)
+  
+  # Count how many rows will be updated
+  n_to_update <- nrow(rerun_filtered)
+  total_na <- sum(is.na(all_results$Prediction))
+  
+  # Print breakdown by round (if available in rerun_results)
+  if (verbose && "round" %in% names(rerun_filtered)) {
+    replaced_summary <- rerun_filtered %>%
+      group_by(round) %>%
+      summarise(n_replaced = n(), .groups = "drop")
+    message("Breakdown by rerun round:")
+    print(replaced_summary)
+  } 
+  
+  # Remove `round` column before update
+  rerun_filtered_core <- rerun_filtered %>% select(-any_of("round"))
+  
+  # Replace rows
+  all_results_updated <- all_results %>%
+    rows_update(rerun_filtered_core, by = "key")
+  
+  # Decide output path
+  if (is.null(output_file)) {
+    output_dir <- file.path(base_dir, "results", "music_class")
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+    output_file <- file.path(output_dir, "music_class_sensitivity_all_results_final.csv")
+  }
+  
+  # Save output
+  write_csv(all_results_updated, output_file)
+  if (verbose) {
+    message("Merged results written to: ", output_file,
+            "\nReplaced ", n_to_update, " NA rows (out of ", total_na, " total NA rows).")
+  }
+  
+  return(all_results_updated)
+}
+
+rerun_results_all <- collect_all_rerun_results(base_dir, max_rounds = 3)
+final_results <- merge_rerun_with_all_results(all_results, rerun_results_all)
+check_missing_rate(final_results)
+
+## Summary metrics
+use_yardstick <- requireNamespace("yardstick", quietly = TRUE)
+if (use_yardstick) {
+  library(yardstick)  # from tidymodels
+}
+
+reduced_classes <- c(
+  "rock/metal",
+  "pop/r&b",
+  "electronic/experimental",
+  "folk/country/global/jazz",
+  "rap"
+)
+
+final_results <- final_results %>%
+  mutate(GroundTruth = factor(GroundTruth, levels = reduced_classes))
+
+# Helper: build a unique param key (cover all params)
+fmt_pk <- function(temperature, top_p, top_k, max_tokens, batch_size) {
+  sprintf("%.1f_%.1f_%d_%d_%d",
+          as.numeric(temperature),
+          as.numeric(top_p),
+          as.integer(top_k),
+          as.integer(max_tokens),
+          as.integer(batch_size))
+}
+add_param_key <- function(df) {
+  df %>%
+    mutate(
+      temperature = as.numeric(temperature),
+      top_p       = as.numeric(top_p),
+      top_k       = as.integer(top_k),
+      max_tokens  = as.integer(max_tokens),
+      batch_size  = as.integer(batch_size),
+      param_key   = fmt_pk(temperature, top_p, top_k, max_tokens, batch_size)
+    )
+}
+
+# ===== Helper: normalise labels to the 5-class set and mark invalid =====
+normalise_labels <- function(df) {
+  # Ensure GroundTruth is factor with the 5 reduced classes
+  allowed <- levels(df$GroundTruth)
+  if (is.null(allowed)) {
+    stop("`GroundTruth` must be a factor with defined levels (the 5 reduced classes).")
+  }
+  df %>%
+    mutate(
+      Prediction_norm = ifelse(Prediction %in% allowed, Prediction, NA_character_),
+      invalid_label   = ifelse(!is.na(Prediction) & is.na(Prediction_norm), 1L, 0L)
+    )
+}
+
+# ===== Custom metrics if yardstick is unavailable =====
+safe_metrics_grouped <- function(df) {
+  # df: group is param_key
+  # We assume: columns 'GroundTruth' (factor), 'Prediction_norm' (character), 'invalid_label' (0/1), 'latency_sec'
+  # Drop rows with NA Prediction_norm for metric computation, but keep them for coverage.
+  df2 <- df %>% mutate(
+    truth = GroundTruth,
+    estimate = factor(Prediction_norm, levels = levels(GroundTruth))
+  )
+  total_n   <- nrow(df2)
+  covered_n <- sum(!is.na(df2$estimate))
+  coverage  <- covered_n / total_n
+  invalid_rate <- mean(df2$invalid_label, na.rm = TRUE)
+  
+  # If nothing is covered, return NA metrics
+  if (covered_n == 0) {
+    return(tibble(
+      accuracy = NA_real_,
+      macro_precision = NA_real_,
+      macro_recall = NA_real_,
+      macro_f1 = NA_real_,
+      micro_f1 = NA_real_,       # With hard labels and no sample weights, micro F1 = accuracy
+      weighted_f1 = NA_real_,    # We'll compute weighted by support
+      kappa = NA_real_,
+      mcc = NA_real_,
+      coverage = coverage,
+      invalid_rate = invalid_rate,
+      n = total_n,
+      latency_p50 = median(df$latency_sec, na.rm = TRUE),
+      latency_p90 = quantile(df$latency_sec, 0.9, na.rm = TRUE),
+      latency_mean = mean(df$latency_sec, na.rm = TRUE)
+    ))
+  }
+  
+  # Confusion matrix
+  cm <- table(df2$truth, df2$estimate, dnn = c("truth","pred"))
+  
+  # Accuracy
+  acc <- sum(diag(cm)) / sum(cm)
+  
+  # Per-class precision/recall/F1
+  eps <- 1e-12
+  tp <- diag(cm)
+  fp <- colSums(cm) - tp
+  fn <- rowSums(cm) - tp
+  precision_i <- tp / pmax(tp + fp, eps)
+  recall_i    <- tp / pmax(tp + fn, eps)
+  f1_i        <- 2 * precision_i * recall_i / pmax(precision_i + recall_i, eps)
+  
+  macro_precision <- mean(precision_i, na.rm = TRUE)
+  macro_recall    <- mean(recall_i, na.rm = TRUE)
+  macro_f1        <- mean(f1_i, na.rm = TRUE)
+  
+  # Micro-F1 equals accuracy for multiclass with hard labels
+  micro_f1 <- acc
+  
+  # Weighted-F1 (by true support)
+  support <- rowSums(cm)
+  weighted_f1 <- sum(f1_i * support, na.rm = TRUE) / sum(support, na.rm = TRUE)
+  
+  # Cohen's kappa
+  total <- sum(cm)
+  p0 <- acc
+  pr <- rowSums(cm) / total
+  pc <- colSums(cm) / total
+  pe <- sum(pr * pc)
+  kappa <- if (abs(1 - pe) < eps) NA_real_ else (p0 - pe) / (1 - pe)
+  
+  # Multiclass MCC (Gorodkin’s generalisation)
+  # MCC = (sum_i sum_j sum_k C_ii*C_jk - C_ij*C_ki) / sqrt( (sum_i t_i)*(sum_i p_i) * (sum_i t'_i)*(sum_i p'_i) )
+  # We'll use formula from sklearn-like implementations
+  t_sum <- rowSums(cm)
+  p_sum <- colSums(cm)
+  c_sum <- sum(cm)
+  s <- 0
+  for (i in seq_along(t_sum)) {
+    s <- s + cm[i,i] * c_sum - t_sum[i] * p_sum[i]
+  }
+  denom_left  <- sqrt( (c_sum^2 - sum(p_sum^2)) * (c_sum^2 - sum(t_sum^2)) )
+  mcc <- if (denom_left < eps) NA_real_ else s / denom_left
+  
+  tibble(
+    accuracy = acc,
+    macro_precision = macro_precision,
+    macro_recall = macro_recall,
+    macro_f1 = macro_f1,
+    micro_f1 = micro_f1,
+    weighted_f1 = weighted_f1,
+    kappa = kappa,
+    mcc = mcc,
+    coverage = coverage,
+    invalid_rate = invalid_rate,
+    n = total_n,
+    latency_p50 = median(df$latency_sec, na.rm = TRUE),
+    latency_p90 = quantile(df$latency_sec, 0.9, na.rm = TRUE),
+    latency_mean = mean(df$latency_sec, na.rm = TRUE)
+  )
+}
+
+# Yardstick-based grouped metrics (if available)
+yardstick_metrics_grouped <- function(df) {
+  # Drop NA predictions for metric computation; keep coverage separately
+  total_n   <- nrow(df)
+  covered_n <- sum(!is.na(df$Prediction_norm))
+  coverage  <- covered_n / total_n
+  invalid_rate <- mean(df$invalid_label, na.rm = TRUE)
+  
+  dfm <- df %>%
+    filter(!is.na(Prediction_norm)) %>%
+    mutate(
+      truth = GroundTruth,
+      estimate = factor(Prediction_norm, levels = levels(GroundTruth))
+    )
+  
+  if (nrow(dfm) == 0) {
+    return(tibble(
+      accuracy = NA_real_,
+      macro_precision = NA_real_,
+      macro_recall = NA_real_,
+      macro_f1 = NA_real_,
+      micro_f1 = NA_real_,
+      weighted_f1 = NA_real_,
+      kappa = NA_real_,
+      mcc = NA_real_,
+      coverage = coverage,
+      invalid_rate = invalid_rate,
+      n = total_n,
+      latency_p50 = median(df$latency_sec, na.rm = TRUE),
+      latency_p90 = quantile(df$latency_sec, 0.9, na.rm = TRUE),
+      latency_mean = mean(df$latency_sec, na.rm = TRUE)
+    ))
+  }
+  
+  # Accuracy and Kappa
+  acc  <- yardstick::accuracy(dfm, truth, estimate) %>% pull(.estimate)
+  kap  <- yardstick::kap(dfm, truth, estimate) %>% pull(.estimate)
+  
+  # F1s
+  f1_macro    <- yardstick::f_meas(dfm, truth, estimate, estimator = "macro")   %>% pull(.estimate)
+  f1_micro    <- yardstick::f_meas(dfm, truth, estimate, estimator = "micro")   %>% pull(.estimate)
+  f1_weighted <- yardstick::f_meas(dfm, truth, estimate, estimator = "macro_weighted")%>% pull(.estimate)
+  
+  # Macro precision / recall
+  prec_macro <- yardstick::precision(dfm, truth, estimate, estimator = "macro") %>% pull(.estimate)
+  rec_macro  <- yardstick::recall(dfm, truth, estimate, estimator  = "macro")  %>% pull(.estimate)
+  
+  # MCC (Multiclass)
+  mcc <- yardstick::mcc(dfm, truth, estimate) %>% pull(.estimate)
+  
+  tibble(
+    accuracy = acc,
+    macro_precision = prec_macro,
+    macro_recall = rec_macro,
+    macro_f1 = f1_macro,
+    micro_f1 = f1_micro,
+    weighted_f1 = f1_weighted,
+    kappa = kap,
+    mcc = mcc,
+    coverage = coverage,
+    invalid_rate = invalid_rate,
+    n = total_n,
+    latency_p50 = median(df$latency_sec, na.rm = TRUE),
+    latency_p90 = quantile(df$latency_sec, 0.9, na.rm = TRUE),
+    latency_mean = mean(df$latency_sec, na.rm = TRUE)
+  )
+}
+
+# calculate Summary Metrics by param combos
+compute_multiclass_summary <- function(results_df, out_csv = NULL) {
+  
+  df0 <- results_df %>%
+    add_param_key() %>%
+    normalise_labels()
+  
+  # core metrics (grouped)
+  if (use_yardstick) {
+    summary_df <- df0 %>%
+      group_by(param_key, temperature, top_p, top_k, 
+               max_tokens, batch_size) %>%
+      group_modify(~ yardstick_metrics_grouped(.x)) %>%
+      ungroup()
+  } else {
+    summary_df <- df0 %>%
+      group_by(param_key, temperature, top_p, top_k, max_tokens, batch_size) %>%
+      group_modify(~ safe_metrics_grouped(.x)) %>%
+      ungroup()
+  }
+  
+  # divergence between predicted and true distributions (distributional similarity; lower is better)
+  # use a simple Jensen-Shannon divergence approximation (align to 5 classes)
+  js_div <- function(p, q, eps = 1e-12) {
+    p <- p / pmax(sum(p), eps); q <- q / pmax(sum(q), eps)
+    m <- 0.5*(p + q)
+    kld <- function(a,b) sum(ifelse(a>0, a*log(pmax(a,eps)/pmax(b,eps)), 0))
+    0.5*kld(p,m) + 0.5*kld(q,m)
+  }
+  
+  dist_df <- df0 %>%
+    mutate(estimate = factor(Prediction_norm, levels = levels(GroundTruth))) %>%
+    group_by(param_key, temperature, top_p, top_k, max_tokens, batch_size) %>%
+    summarise(
+      dist_js = {
+        truth_ct <- table(GroundTruth)
+        pred_ct  <- table(estimate)
+        # align to same level order
+        lev <- levels(GroundTruth)
+        p_truth <- as.numeric(truth_ct[lev]); p_truth[is.na(p_truth)] <- 0
+        p_pred  <- as.numeric(pred_ct[lev]);  p_pred[is.na(p_pred)]  <- 0
+        js_div(p_truth, p_pred)
+      },
+      .groups = "drop"
+    )
+  
+  summary_all <- summary_df %>%
+    left_join(dist_df, by = c("param_key","temperature","top_p","top_k", "max_tokens","batch_size")) %>%
+    arrange(desc(macro_f1))
+  
+  if (!is.null(out_csv)) readr::write_csv(summary_all, out_csv)
+  summary_all
+}
+
+# calculate Per-class indicators
+compute_per_class_metrics <- function(results_df, out_csv = NULL) {
+  df0 <- results_df %>%
+    add_param_key() %>%
+    normalise_labels() %>%
+    mutate(estimate = factor(Prediction_norm, levels = levels(GroundTruth)))
+  
+  if (use_yardstick) {
+    per_cls <- df0 %>%
+      filter(!is.na(estimate)) %>%
+      group_by(param_key, temperature, top_p, top_k, max_tokens, batch_size) %>%
+      yardstick::precision(GroundTruth, estimate, estimator = "macro_weighted") %>% # not per-class
+      ungroup() # we'll compute per-class manually below anyway
+  }
+  
+  # per-class precision/recall/f1
+  per_class <- df0 %>%
+    group_by(param_key, temperature, top_p, top_k, max_tokens, batch_size) %>%
+    group_modify(~ {
+      d <- .x %>% filter(!is.na(estimate))
+      if (nrow(d) == 0) return(tibble())
+      lev <- levels(d$GroundTruth)
+      cm <- table(d$GroundTruth, d$estimate)
+      eps <- 1e-12
+      tp <- diag(cm); fp <- colSums(cm) - tp; fn <- rowSums(cm) - tp
+      prec_i <- tp / pmax(tp + fp, eps)
+      rec_i  <- tp / pmax(tp + fn, eps)
+      f1_i   <- 2 * prec_i * rec_i / pmax(prec_i + rec_i, eps)
+      tibble(
+        class = lev,
+        precision = as.numeric(prec_i),
+        recall = as.numeric(rec_i),
+        f1 = as.numeric(f1_i),
+        support = as.numeric(rowSums(cm))
+      )
+    }) %>% ungroup()
+  
+  if (!is.null(out_csv)) readr::write_csv(per_class, out_csv)
+  per_class
+}
+# save
+summary_metrics <- compute_multiclass_summary(
+  final_results,
+  out_csv = file.path("Sensitivity_Analysis_new_prams/results/music_class", "summary_multiclass_metrics.csv")
+)
+# 
+# summary_metrics <- compute_per_class_metrics(
+#   final_results,
+#   out_csv = file.path("Sensitivity_Analysis_new_prams/results/music_class", "per_class_metrics.csv")
+# )
+```
+
+# Visualization
+### 1) Table of top 10 param combos (by macro-F1)
+
+```{r table1}
+# load data
+summary_metrics <- read_csv("results/music_class_1/summary_multiclass_metrics.csv")
+
+# # Top-10 param combos（by Macro-F1）
+# summary_metrics %>% 
+#   arrange(desc(macro_f1)) %>% 
+#   select(param_key, temperature, top_p, top_k,
+#          macro_f1, accuracy, weighted_f1, kappa, mcc, coverage, invalid_rate, dist_js) %>% 
+#   head(10)
+
+# top10 param combos
+library(dplyr)
+library(kableExtra)
+top10_params <- summary_metrics %>%
+  arrange(desc(macro_f1)) %>%
+  slice_head(n = 10) %>%
+  select(temperature, top_p, top_k, accuracy, macro_f1)
+
+highlight_rows <- 1:3 
+top10_params %>%
+  kbl(format = "html", digits = 3,
+      caption = "Top 10 Parameter Combinations (Music Genre Classification)") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed")) %>%
+  row_spec(highlight_rows, bold = TRUE, background = "#FFD580")
+# # save
+# write_csv(top10_params, "Sensitivity_Analysis_new_prams/results/music_class/top10_params.csv")
+```
+
+### 2) Confusion matrix of the best parameter combinations
+
+```{r p1, fig.width=10, fig.height=8}
+## confusion matrix
+fmt_pk3 <- function(temperature, top_p, top_k) {
+  sprintf("%.1f_%.1f_%d",
+          as.numeric(temperature),
+          as.numeric(top_p),
+          as.integer(top_k))
+}
+add_param_key3 <- function(df) {
+  df %>%
+    mutate(
+      temperature = as.numeric(temperature),
+      top_p       = as.numeric(top_p),
+      top_k       = as.integer(top_k),
+      param_key   = fmt_pk3(temperature, top_p, top_k)
+    )
+}
+
+reduced_classes <- c(
+  "rock/metal",
+  "pop/r&b",
+  "electronic/experimental",
+  "folk/country/global/jazz",
+  "rap"
+)
+
+final_results <- read_csv("results/music_class_1/music_class_sensitivity_all_results_final.csv") %>%
+  select(-any_of("key")) %>%  
+  mutate(
+    GroundTruth = factor(GroundTruth, levels = reduced_classes),
+    Prediction  = factor(Prediction,  levels = reduced_classes)
+  ) %>%
+  add_param_key3()
+
+summary_metrics <- summary_metrics %>% add_param_key3()
+### count
+# 1. select the best combination from summary_metrics 
+best_keys_all <- summary_metrics %>%
+  slice_max(order_by = macro_f1, n = 1, with_ties = TRUE) %>%
+  pull(param_key)
+
+# best_keys_all
+
+# plot function
+plot_conf_mat_for_key <- function(results_df, param_key_sel, summary_metrics, mode = c("prop", "count")) {
+  mode <- match.arg(mode)
+  levs <- levels(results_df$GroundTruth)
+  
+  df <- results_df %>%
+    dplyr::filter(param_key == param_key_sel) %>%
+    dplyr::mutate(
+      estimate = factor(
+        ifelse(as.character(Prediction) %in% levs, as.character(Prediction), NA_character_),
+        levels = levs
+      )
+    ) %>%
+    dplyr::filter(!is.na(estimate))
+  
+  if (nrow(df) == 0) {
+    stop(paste0("No rows matched param_key = ", param_key_sel,
+                ". Check param_key formatting or whether this combo exists."))
+  }
+  
+  cm <- table(df$GroundTruth, df$estimate)
+  cm_df <- as.data.frame(cm)
+  names(cm_df) <- c("truth","pred","n")
+  
+  if (mode == "prop") {
+    cm_df <- cm_df %>%
+      dplyr::group_by(truth) %>%
+      dplyr::mutate(value = ifelse(sum(n) == 0, 0, n / sum(n))) %>%
+      dplyr::ungroup()
+    fill_lab <- "Proportion"
+    text_map <- ggplot2::aes(label = sprintf("%d (%.2f)", n, value))
+  } else {
+    cm_df <- cm_df %>% dplyr::mutate(value = n)
+    fill_lab <- "Count"
+    text_map <- ggplot2::aes(label = n)
+  }
+  
+  sm <- summary_metrics %>% dplyr::filter(param_key == param_key_sel) %>% dplyr::slice(1)
+  acc_txt <- if (nrow(sm)) paste0("Acc=", round(sm$accuracy[1], 3)) else "Acc=NA"
+  f1_txt  <- if (nrow(sm)) paste0("Macro-F1=", round(sm$macro_f1[1], 3)) else "Macro-F1=NA"
+  
+  ggplot(cm_df, ggplot2::aes(x = pred, y = truth, fill = value)) +
+  geom_tile() +
+  geom_text(text_map, colour = "black", size = 3) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = paste("Confusion matrix –", param_key_sel, "|", acc_txt, "|", f1_txt),
+       x = "Predicted", y = "True", fill = fill_lab
+       ) +
+  coord_equal() +
+  theme_minimal() 
+}
+
+plots <- lapply(best_keys_all, function(k) {
+  plot_conf_mat_for_key(final_results, k, summary_metrics, mode = "count")
+})
+
+plots[[1]]
+```
+
+```{r p2, fig.width=10, fig.height=8, echo=FALSE}
+plots[[2]]
+```
+
+
+```{r p3, fig.width=10, fig.height=8, echo=FALSE}
+plots[[3]]
+```
+
+```{r save, eval=FALSE}
+plot_dir <- file.path(base_dir, "plots", "music_class")
+ggsave(file.path(plot_dir, "p1_confusion_matrix_music_class_count1.png"), plot = plots[[1]], width = 14, height = 10, dpi = 300)
+ggsave(file.path(plot_dir, "p2_confusion_matrix_music_class_count2.png"), plot = plots[[2]], width = 14, height = 10, dpi = 300)
+ggsave(file.path(plot_dir, "p3_confusion_matrix_music_class_count3.png"), plot = plots[[3]], width = 14, height = 10, dpi = 300)
+```
+
