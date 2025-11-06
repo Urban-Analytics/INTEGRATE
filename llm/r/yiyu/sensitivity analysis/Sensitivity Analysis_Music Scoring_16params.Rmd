@@ -1,0 +1,788 @@
+---
+title: "Sensitivity Analysis - Music Reviews (Continuous Scoring)"
+author: "Yiyu Wang"
+date: "2025-09-23"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document:
+    keep_tex: true
+    latex_engine: xelatex
+subparagraph: true
+urlcolor: blue
+linkcolor: black
+params:
+  base_dir: "llm_results/continuous_music_sensitivity/"
+  experiment_type: "small16"     # or "full243"
+  scoring_rule_type: "simple"    # or "detailed"
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{booktabs}
+---
+
+```{r setup, eval = T, echo = F, message = F, warning = F, results ='hide'}
+library(knitr)
+library(kableExtra)
+options(width=60)
+opts_chunk$set(echo = TRUE, comment="", error=FALSE, 
+               #cache.lazy = FALSE, 
+               fig.align="center", message=FALSE, warning=FALSE, tidy = FALSE)
+```
+
+# LLM-based Analysis for Restaurant, Movie and Music Reviews
+## 1.3 LLM Sensitivity analysis - music reviews (0-100 scoring)
+
+```{r codeblock}
+### Setup
+library(tidyverse)
+library(httr)
+library(jsonlite)
+library(glue)
+library(scales)
+library(purrr)
+library(ggplot2)
+library(ggrepel)
+library(readr)
+```
+
+```{r, eval=FALSE}
+# experiment type switch
+# choose between "small16" (16 combos) or "full243" (full grid)
+experiment_type <- "small16"
+
+# scoring rule switch
+# Choose between "simple" (6 buckets) or "detailed" (8 buckets)
+scoring_rule_type <- "simple"
+
+# logs & results directory
+dir.create("logs_music_scoring", showWarnings = FALSE)
+base_dir <- "llm_results/continuous_music_sensitivity/"
+dir.create(base_dir, recursive = TRUE, showWarnings = FALSE)
+
+results_dir <- file.path("results_music_scoring", experiment_type)
+dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
+
+# load data
+music_data <- read_csv("data/pitchfork_reviews.csv") %>%
+  transmute(id = row_number(),
+            review = as.character(review),
+            score = as.numeric(score) * 10  # scale to 0–100
+            ) %>%
+  filter(!is.na(review), !is.na(score))
+
+# batch split
+split_batches <- function(data, batch_size) {
+  split(data, ceiling(seq_len(nrow(data)) / batch_size))
+}
+
+# null-coalescing helper
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+
+# scoring rules generator
+generate_scoring_rules <- function(type = "simple") {
+  if (type == "detailed") {
+    return(
+      "Scoring rules:
+      - 0–19: catastrophic failure, unlistenable
+      - 20–39: very poor, weak execution, major flaws
+      - 40–59: below average, inconsistent, lacking originality
+      - 60–69: decent but unremarkable, has both strengths and weaknesses
+      - 70–79: good, enjoyable, worth listening but not groundbreaking
+      - 80–89: excellent, strong artistic vision, high replay value
+      - 90–94: outstanding, innovative, memorable, highly recommended
+      - 95–100: masterpiece, defining work, rare and exceptional"
+    )
+  } else {
+    return(
+      "Scoring rules:
+      - 0–20: very poor
+      - 21–40: below average
+      - 41–60: average
+      - 61–80: good to very good
+      - 81–90: excellent
+      - 91–100: exceptional"
+    )
+  }
+}
+
+# prompt design
+generate_prompt_music <- function(batch_size) {
+  glue(
+    "You are an expert AI music reviewer, designed to assess and score the quality of music albums, in the style of Pitchfork, based on written reviews. 
+     Pitchfork reviews typically score most albums between 60 and 80, with truly exceptional albums sometimes scoring above 90, and very poor albums below 50.
+     Please use the full range where appropriate, but avoid clustering all scores near the mean. 
+     Do not assign most reviews similar scores - use lower and higher scores when justified by the review content.
+
+     Here are some example reviews and their corresponding scores:
+     1. ‘A breathtaking, genre-defying album that rewrites the rules of pop music.’ → 96
+     2. ‘Though the production is clean, most tracks are uninspired and forgettable.’ → 52
+     3. ‘A solid indie rock record with a few standout songs but too much filler.’ → 68
+     4. ‘Truly disappointing, lacking any memorable hooks or emotion.’ → 37
+     5. ‘Inventive, emotionally resonant, and brilliantly produced.’ → 88
+
+     I will provide you with a batch of {batch_size} music reviews. 
+     Your task is to analyze the text in each review and assign a Pitchfork-style score from 0 to 100, 
+    {generate_scoring_rules(scoring_rule_type)}
+
+     You must return exactly {batch_size} scores, one per review, in a structured format.
+     The output should be a JSON array of exactly {batch_size} numbers.
+     Example: [87, 74, 92, 51, 69, ...].
+     Do not explain any reasoning. Do not include any explanations or additional text."
+  )
+}
+
+build_messages_music <- function(batch_reviews) {
+  n <- nrow(batch_reviews)
+  sys_msg <- glue(
+    "You are an AI that scores music reviews from 0 to 100.
+     Output ONLY a JSON array of {n} integers (0–100), in order.
+     No reasoning, no explanations, no labels, no extra text."
+  )
+  user_msg <- paste0(
+    generate_prompt_music(n), "\n\n",
+    paste0(seq_along(batch_reviews$review), ". ", batch_reviews$review, collapse = "\n")
+  )
+  list(
+    list(role = "system", content = sys_msg),
+    list(role = "user", content = user_msg)
+  )
+}
+
+# parse LLM output
+extract_numeric_vec <- function(x) {
+  if (is.numeric(x)) return(as.numeric(x))
+  if (is.list(x)) return(as.numeric(unlist(lapply(x, extract_numeric_vec))))
+  return(numeric(0))
+}
+
+clamp01_100_int <- function(v) {
+  v <- round(as.numeric(v))
+  v[!is.finite(v)] <- NA_real_
+  list(
+    raw = v,
+    clamped = pmin(pmax(v, 0), 100),
+    out_of_range = ifelse(is.na(v), NA_integer_, as.integer(v < 0 | v > 100))
+  )
+}
+
+parse_scores_continuous <- function(raw_output, n_expected) {
+  txt <- trimws(raw_output %||% "")
+  if (startsWith(txt, "[") && !grepl("\\]$", txt) && nchar(txt) < 20000) {
+    txt <- paste0(txt, "]")
+  }
+  parsed <- try(jsonlite::fromJSON(txt), silent = TRUE)
+  nums <- NULL
+  if (!inherits(parsed, "try-error")) nums <- extract_numeric_vec(parsed)
+  
+  if ((is.null(nums) || length(nums) == 0) && nzchar(txt)) {
+    m <- regexpr("\\[[^\\]]*\\]", txt, perl = TRUE)
+    if (m[1] != -1) {
+      candidate <- substr(txt, m[1], m[1] + attr(m, "match.length") - 1)
+      parsed2 <- try(jsonlite::fromJSON(candidate), silent = TRUE)
+      if (!inherits(parsed2, "try-error")) nums <- extract_numeric_vec(parsed2)
+    }
+  }
+  if (is.null(nums) || length(nums) == 0) {
+    matches <- gregexpr("[-+]?[0-9]*\\.?[0-9]+", txt, perl = TRUE)
+    if (matches[[1]][1] != -1) nums <- as.numeric(regmatches(txt, matches)[[1]])
+  }
+  if (is.null(nums) || length(nums) == 0) {
+    return(list(pred = rep(NA_real_, n_expected), out_of_range = rep(NA_integer_, n_expected)))
+  }
+  if (length(nums) < n_expected) nums <- c(nums, rep(NA_real_, n_expected - length(nums)))
+  if (length(nums) > n_expected) nums <- nums[seq_len(n_expected)]
+  adj <- clamp01_100_int(nums)
+  list(pred = adj$clamped, out_of_range = adj$out_of_range)
+}
+
+# API config
+url <- "https://api.together.xyz/v1/chat/completions"
+api_key <- api_key <- Sys.getenv("TOGETHER_API_KEY")
+
+# batch runner
+run_batch_music <- function(batch_reviews, param_row, batch_index, log_file) {
+  messages <- build_messages_music(batch_reviews)
+  n <- nrow(batch_reviews)
+  
+  body_list <- list(
+    model = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    messages = messages,
+    temperature = param_row$temperature,
+    top_p = param_row$top_p,
+    top_k = param_row$top_k,
+    repetition_penalty = param_row$repetition_penalty,
+    max_tokens = param_row$max_tokens,
+    stream = FALSE
+  )
+  
+  t0 <- Sys.time()
+  response <- httr::POST(
+    url,
+    httr::add_headers(Authorization = paste("Bearer", api_key), `Content-Type` = "application/json"),
+    body = jsonlite::toJSON(body_list, auto_unbox = TRUE),
+    encode = "json"
+  )
+  t1 <- Sys.time()
+  latency_sec <- as.numeric(difftime(t1, t0, units = "secs"))
+  status <- tryCatch(httr::status_code(response), error = function(e) NA_integer_)
+  
+  result <- try(httr::content(response, as = "parsed", type = "application/json"), silent = TRUE)
+  assistant_reply <- NA_character_
+  if (!inherits(result, "try-error") && !is.null(result$choices)) {
+    assistant_reply <- str_trim(result$choices[[1]]$message$content)
+  }
+  
+  parsed <- list(pred = rep(NA_real_, n), out_of_range = rep(NA_integer_, n))
+  if (!is.na(assistant_reply)) parsed <- parse_scores_continuous(assistant_reply, n)
+  
+  # minimal conditional logging (recommended)
+  if (!is.null(log_file)) {
+    na_rate <- mean(is.na(parsed$pred))
+    if (isTRUE(status != 200) || na_rate > 0) {
+      head_txt <- substr(as.character(assistant_reply), 1, 160)
+      msg <- paste0(
+        "[batch ", batch_index, "] status=", status,
+        " | latency=", round(latency_sec, 2), "s",
+        " | NA_rate=", round(na_rate, 3),
+        " | params={temp=", param_row$temperature,
+        ", top_p=", param_row$top_p,
+        ", top_k=", param_row$top_k,
+        ", max_tokens=", param_row$max_tokens,
+        ", batch_size=", param_row$batch_size, "}",
+        " | reply_head=", head_txt
+      )
+      write(paste0(msg, "\n"), file = log_file, append = TRUE)
+    }
+  }
+  
+  tibble(
+    dataset = "music",
+    id = batch_reviews$id,
+    Review = batch_reviews$review,
+    GroundTruth = batch_reviews$score,
+    Prediction = parsed$pred,
+    OutOfRangeFlag = parsed$out_of_range,
+    batch_index = batch_index,
+    latency_sec = latency_sec,
+    temperature = param_row$temperature,
+    top_p = param_row$top_p,
+    top_k = param_row$top_k,
+    repetition_penalty = param_row$repetition_penalty,
+    max_tokens = param_row$max_tokens,
+    batch_size = n
+  )
+}
+
+# Metrics
+compute_regression_metrics <- function(y_true, y_pred) {
+  y_true <- as.numeric(y_true)
+  y_pred <- as.numeric(y_pred)
+  mask <- is.finite(y_true) & is.finite(y_pred)
+  yt <- y_true[mask]; yp <- y_pred[mask]
+  
+  if (length(yt) < 2) return(tibble(mae = NA_real_, rmse = NA_real_, r2 = NA_real_))
+  
+  err <- yp - yt
+  mae <- mean(abs(err))
+  rmse <- sqrt(mean(err^2))
+  r2 <- 1 - sum((yt - yp)^2) / sum((yt - mean(yt))^2)
+  pearson_r <- suppressWarnings(cor(yt, yp, method = "pearson"))
+  spearman_r <- suppressWarnings(cor(yt, yp, method = "spearman"))
+  smape <- mean(2 * abs(yp - yt) / pmax(abs(yt) + abs(yp), .Machine$double.eps))
+  bias <- mean(err)
+  error_sd <- sd(err)
+  within_5 <- mean(abs(err) <= 5)
+  within_10 <- mean(abs(err) <= 10)
+  
+  tibble(
+    mae = mae, rmse = rmse, r2 = r2,
+    pearson_r = pearson_r, spearman_rho = spearman_r,
+    smape = smape, bias = bias, error_sd = error_sd,
+    within_5 = within_5, within_10 = within_10
+  )
+}
+
+# experiment runner
+run_exp_chunk_music <- function(dataset, param_chunk, chunk_id = 1, experiment_type = "small16") {
+  batch_counter <- 1
+  for (i in 1:nrow(param_chunk)) {
+    param_row <- param_chunk[i, ]
+    param_id <- paste0("chunk", chunk_id, "_param", i)
+    output_file <- file.path(results_dir, paste0(param_id, ".csv"))
+    
+    if (file.exists(output_file)) next
+    
+    LOG_FILE <- file.path(
+      "logs_music_scoring",
+      glue("music_sensitivity_{experiment_type}_{param_id}_{format(Sys.time(), '%Y-%m-%d-%H%M%S')}.log")
+    )
+    batches <- split_batches(dataset, param_row$batch_size)
+    combo_results <- vector("list", length(batches))
+    
+    for (b in seq_along(batches)) {
+      res_b <- run_batch_music(batches[[b]], param_row, batch_counter, log_file = LOG_FILE)
+      combo_results[[b]] <- res_b
+      batch_counter <- batch_counter + 1
+    }
+    
+    result_df <- bind_rows(combo_results)
+    write_csv(result_df, output_file)
+  }
+}
+
+# define parameter grids
+param_grid_small16 <- expand.grid(
+  temperature = c(0.1, 0.5),
+  top_p = c(0.8, 1.0),
+  top_k = c(50),
+  max_tokens = c(100, 200),
+  batch_size = c(5, 20),
+  repetition_penalty = 1.0,
+  stringsAsFactors = FALSE
+)
+
+param_grid_full243 <- expand.grid(
+  temperature = c(0.1, 0.2, 0.5),
+  top_p = c(0.8, 0.9, 1.0),
+  top_k = c(20, 50, 100),
+  max_tokens = c(50, 100, 200),
+  batch_size = c(5, 10, 20),
+  repetition_penalty = 1.0,
+  stringsAsFactors = FALSE
+)
+
+# split grid into chunks
+param_grid <- if (experiment_type == "small16") param_grid_small16 else param_grid_full243
+param_chunks <- split(param_grid, ceiling(seq_len(nrow(param_grid)) / 20))
+
+# run experiments
+for (i in seq_along(param_chunks)) {
+  cat(glue("=== Running {experiment_type} chunk {i}/{length(param_chunks)} ===\n"))
+  run_exp_chunk_music(music_data, param_chunks[[i]], chunk_id = i, experiment_type = experiment_type)
+}
+
+# merge results
+all_csvs <- list.files(results_dir, pattern = "\\.csv$", full.names = TRUE)
+stopifnot(length(all_csvs) > 0)
+all_results <- purrr::map_dfr(all_csvs, read_csv, show_col_types = FALSE)
+
+# Function to check NA rate in Prediction column
+check_missing_rate <- function(df) {
+  if (!"Prediction" %in% colnames(df)) {
+    stop("No column named 'Prediction' in the dataframe")
+  }
+  
+  total <- nrow(df)
+  missing <- sum(is.na(df$Prediction))
+  rate <- missing / total * 100
+  
+  cat("Total rows: ", total, "\n")
+  cat("Missing Predictions: ", missing, "\n")
+  cat("Missing rate: ", round(rate, 2), "%\n")
+  
+  return(invisible(rate))
+}
+
+check_missing_rate(all_results)
+
+out_all <- file.path(base_dir, glue("music_tuning_all_results_{experiment_type}_scoring.csv"))
+# save results
+write_csv(all_results, out_all)
+
+# summarize metrics
+summary_metrics <- all_results %>%
+  group_by(dataset, temperature, top_p, top_k, repetition_penalty, max_tokens, batch_size) %>%
+  summarise(
+    metrics = list(compute_regression_metrics(GroundTruth, Prediction)),
+    avg_latency = mean(latency_sec, na.rm = TRUE),
+    missing_rate = mean(is.na(Prediction)),
+    .groups = "drop"
+  ) %>%
+  tidyr::unnest_wider(metrics)
+
+out_summary <- file.path(base_dir, glue("music_tuning_summary_by_params_{experiment_type}_scoring.csv"))
+# save metrics
+write_csv(summary_metrics, out_summary)
+```
+
+# Visualization
+### 1) Tables: Top 10 parameter combinations
+
+```{r top_mae}
+set.seed(42)
+
+base_dir <- "llm_results/continuous_music_sensitivity/"
+path_summary <- file.path(base_dir, "music_tuning_summary_by_params_small16_scoring.csv")
+path_all     <- file.path(base_dir, "music_tuning_all_results_small16_scoring.csv")
+
+
+stopifnot(file.exists(path_summary), file.exists(path_all))
+
+summary_df <- read_csv(path_summary, show_col_types = FALSE)
+all_df     <- read_csv(path_all,     show_col_types = FALSE)
+
+# prep: Build a readable combo_id for labeling
+to_chr <- function(x) if (is.numeric(x)) as.character(x) else as.character(x)
+
+summary_df <- summary_df %>%
+  mutate(
+    temperature        = to_chr(temperature),
+    top_p              = to_chr(top_p),
+    top_k              = to_chr(top_k),
+    max_tokens         = to_chr(max_tokens),
+    batch_size         = to_chr(batch_size),
+    combo_id = glue("T{temperature}_P{top_p}_K{top_k}_M{max_tokens}_B{batch_size}")
+  )
+
+# Ensure metrics present
+req_cols <- c("mae","rmse","pearson_r","spearman_rho","r2","smape","bias","error_sd",
+              "within_5","within_10","avg_latency","missing_rate")
+stopifnot(all(req_cols %in% names(summary_df)))
+
+# Quick leaderboard
+top_mae <- summary_df %>%
+  arrange(mae, rmse, desc(pearson_r)) %>%
+  select(combo_id, temperature, top_p, top_k, max_tokens, batch_size,
+         mae, rmse, pearson_r, r2, within_5, within_10, smape, missing_rate, avg_latency) %>%
+  head(10)
+
+print(top_mae)
+```
+
+```{r visuals}
+# Multi-objective scoring (tunable weights)
+# Lower is better: mae, rmse, smape, missing_rate, avg_latency, |bias|, error_sd
+# Higher is better: pearson_r, r2, within_5, within_10
+# We'll build a single composite score in [0,1] (higher is better)
+w <- list(
+  mae = 0.45, rmse = 0.25, pearson = 0.20, r2 = 0.10
+)
+penalty <- list(
+  missing_rate = 0.20,   # subtract
+  smape = 0.10,          # subtract
+  latency = 0.05         # subtract (optional)
+)
+
+# helper: min-max normalize safe
+mm <- function(x) {
+  if (all(is.na(x))) return(rep(NA_real_, length(x)))
+  rng <- range(x, na.rm = TRUE)
+  if (diff(rng) == 0) return(rep(0.5, length(x)))
+  (x - rng[1]) / (rng[2] - rng[1])
+}
+
+rank_df <- summary_df %>%
+  mutate(
+    mae_n   = mm(mae),
+    rmse_n  = mm(rmse),
+    pr_n    = mm(pearson_r), # larger better
+    r2_n    = mm(r2),
+    mr_n    = mm(missing_rate),
+    smape_n = mm(smape),
+    lat_n   = mm(avg_latency)
+  ) %>%
+  mutate(
+    # composite: higher is better
+    score_composite =
+      (1 - mae_n)   * w$mae +
+      (1 - rmse_n)  * w$rmse +
+      pr_n          * w$pearson +
+      r2_n          * w$r2 -
+      (mr_n * penalty$missing_rate + smape_n * penalty$smape + lat_n * penalty$latency)
+  ) %>%
+  arrange(desc(score_composite))
+
+rank_df %>%
+  select(combo_id, temperature, top_p, top_k, max_tokens, batch_size,
+         score_composite, mae, rmse, pearson_r, r2, within_5, within_10,
+         missing_rate, smape, avg_latency) %>%
+  head(10) %>%
+  print(n = 10)
+```
+
+```{r pareto}
+# ---------- Pareto frontier (MAE↓, RMSE↓, -Pearson↓ i.e. Pearson↑) ----------
+is_dominated <- function(a, b) {
+  # a is dominated by b if b is <= on (mae, rmse) and >= on pearson, and strictly better on at least one
+  (b$mae <= a$mae) & (b$rmse <= a$rmse) & (b$pearson_r >= a$pearson_r) &
+    ( (b$mae < a$mae) | (b$rmse < a$rmse) | (b$pearson_r > a$pearson_r) )
+}
+
+pareto_flag <- rep(TRUE, nrow(summary_df))
+for (i in seq_len(nrow(summary_df))) {
+  for (j in seq_len(nrow(summary_df))) {
+    if (i != j && is_dominated(summary_df[i,], summary_df[j,])) {
+      pareto_flag[i] <- FALSE
+      break
+    }
+  }
+}
+summary_df$pareto <- pareto_flag
+
+# cat("Pareto set size:", sum(summary_df$pareto), "\n")
+pareto_tbl <- summary_df %>%
+  filter(pareto) %>%
+  arrange(mae, rmse, desc(pearson_r)) %>%
+  select(combo_id, temperature, top_p, top_k, max_tokens, batch_size, mae, rmse, pearson_r, missing_rate)
+print(pareto_tbl, n = nrow(pareto_tbl))
+```
+
+### 2) Scatter: RMSE vs Pearson correlation across param settings
+
+```{r p1}
+# 1) Scatter: RMSE vs Pearson r (good combos: low RMSE, high corr)
+p_scatter <- summary_df %>%
+  ggplot(aes(x = rmse, y = pearson_r, color = temperature, shape = batch_size, label = combo_id)) +
+  geom_point(size = 3, alpha = 0.85) +
+  geom_text_repel(max.overlaps = 12, size = 3) +
+  labs(title = "RMSE vs Pearson correlation across parameter settings (small16)",
+       x = "RMSE (lower better)", y = "Pearson r (higher better)") +
+  theme_bw()
+print(p_scatter)
+```
+
+### 3) MAE Heatmap over max_tokens & top_k (faceted by temperature & batch size)
+
+```{r p2, fig.width=12, fig.height=8}
+# 2) Heatmap: MAE over (max_tokens x top_p) faceted by temperature & batch_size
+label_temp  <- function(x) paste0("temp. = ", x)
+label_batch <- function(x) paste0("batch_size = ", x)
+
+p_hm <- summary_df %>%
+  ggplot(aes(x = max_tokens, y = top_p, fill = mae)) +
+  geom_tile(color = "white") +
+  facet_grid(
+    rows = vars(batch_size),
+    cols  = vars(temperature),
+    labeller = labeller(
+      temperature = label_temp,
+      batch_size  = label_batch
+    )
+  ) +
+  scale_fill_gradient(low = "#f0f9e8", high = "#0868ac") +
+  labs(title = "MAE heatmap (max_tokens × top_p) by temperature & batch_size",
+       x = "max_tokens", y = "top_p", fill = "MAE") +
+  theme_minimal(base_size = 11)
+
+print(p_hm)
+```
+
+### 4) Main effects: Average MAE by parameter combinations
+
+```{r p3}
+# 3) Main effects: average MAE by each parameter (quick variance drill)
+main_effect <- function(df, param) {
+  df %>%
+    group_by(.data[[param]]) %>%
+    summarise(mae = mean(mae, na.rm = TRUE),
+              rmse = mean(rmse, na.rm = TRUE),
+              pearson_r = mean(pearson_r, na.rm = TRUE),
+              .groups = "drop") %>%
+    mutate(param = param, level = as.character(.data[[param]])) %>%
+    select(param, level, mae, rmse, pearson_r)
+}
+me_df <- bind_rows(
+  main_effect(summary_df, "temperature"),
+  main_effect(summary_df, "top_p"),
+  main_effect(summary_df, "top_k"),
+  main_effect(summary_df, "max_tokens"),
+  main_effect(summary_df, "batch_size")
+)
+
+p_me <- me_df %>%
+  ggplot(aes(x = level, y = mae, group = 1)) +
+  geom_line() + geom_point(size = 3) +
+  facet_wrap(~ param, scales = "free_x") +
+  labs(title = "Main effects on MAE by parameter", x = "Level", y = "MAE") +
+  theme_bw()
+print(p_me)
+```
+
+### 5) Failure rate heatmap
+
+```{r p4}
+# 4) Missing rate map (sanity on stability)
+p_miss <- summary_df %>%
+  ggplot(aes(x = max_tokens, y = top_p, fill = missing_rate)) +
+  geom_tile(color = "white") +
+  facet_grid(batch_size ~ temperature) +
+  scale_fill_gradient(low = "#f0f9e8", high = "#d73027", labels = percent_format(accuracy = 1)) +
+  labs(title = "Missing rate across params", x = "max_tokens", y = "top_p", fill = "Missing rate") +
+  theme_minimal(base_size = 11)
+print(p_miss)
+```
+
+### 6) Calibration (slope vs intercept) per parameter combinations
+
+```{r p5}
+# Calibration check per combo
+# Compute slope/intercept of lm(GroundTruth ~ Prediction) using raw rows
+calib_df <- all_df %>%
+  mutate(
+    temperature = to_chr(temperature),
+    top_p       = to_chr(top_p),
+    top_k       = to_chr(top_k),
+    max_tokens  = to_chr(max_tokens),
+    batch_size  = to_chr(batch_size),
+    combo_id    = glue("T{temperature}_P{top_p}_K{top_k}_M{max_tokens}_B{batch_size}")
+  ) %>%
+  group_by(combo_id, temperature, top_p, top_k, max_tokens, batch_size) %>%
+  summarise(
+    calib_intercept = {
+      fit <- try(lm(GroundTruth ~ Prediction), silent = TRUE)
+      if (inherits(fit, "try-error")) NA_real_ else coef(fit)[1]
+    },
+    calib_slope = {
+      fit <- try(lm(GroundTruth ~ Prediction), silent = TRUE)
+      if (inherits(fit, "try-error")) NA_real_ else coef(fit)[2]
+    },
+    .groups = "drop"
+  )
+
+p_cal <- calib_df %>%
+  ggplot(aes(x = calib_slope, y = calib_intercept, color = temperature, shape = batch_size)) +
+  geom_point(size = 3, alpha = 0.85) +
+  geom_vline(xintercept = 1, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(title = "Calibration (slope vs intercept) per param combo",
+       x = "Slope (ideal = 1)", y = "Intercept (ideal = 0)") +
+  theme_bw()
+print(p_cal)
+```
+
+### 7) Bootstrap CIs for parameter combinations (optional)
+
+```{r p6}
+# Bootstrap CIs for param combos (optional?)
+set.seed(2025)
+
+# sanity check
+if (!exists("summary_df") || !exists("all_df")) {
+  stop("Please run the validation/comparison section first to create summary_df and all_df.")
+}
+
+# helper: safe correlation
+safe_cor <- function(x, y, method = "pearson") {
+  x <- as.numeric(x); y <- as.numeric(y)
+  if (length(x) < 3 || sd(x, na.rm = TRUE) == 0 || sd(y, na.rm = TRUE) == 0) return(NA_real_)
+  suppressWarnings(cor(x, y, method = method, use = "complete.obs"))
+}
+
+# per-replicate metrics on a (y, yhat) pair
+metrics_once <- function(y, yhat) {
+  mask <- is.finite(y) & is.finite(yhat)
+  y <- y[mask]; yhat <- yhat[mask]
+  n <- length(y)
+  if (n < 2) {
+    return(c(mae = NA_real_, rmse = NA_real_, pearson_r = NA_real_,
+             within_5 = NA_real_, within_10 = NA_real_))
+  }
+  err <- yhat - y
+  c(
+    mae = mean(abs(err)),
+    rmse = sqrt(mean(err^2)),
+    pearson_r = safe_cor(y, yhat, "pearson"),
+    within_5  = mean(abs(err) <= 5),
+    within_10 = mean(abs(err) <= 10)
+  )
+}
+
+# bootstrap on one combo's raw rows
+bootstrap_combo <- function(df_combo, B = 200) {
+  y <- df_combo$GroundTruth
+  yhat <- df_combo$Prediction
+  n <- length(y)
+  if (n < 5) {
+    return(tibble(
+      mae_mean = NA, mae_p2.5 = NA, mae_p97.5 = NA,
+      rmse_mean = NA, rmse_p2.5 = NA, rmse_p97.5 = NA,
+      pearson_mean = NA, pearson_p2.5 = NA, pearson_p97.5 = NA,
+      within5_mean = NA, within5_p2.5 = NA, within5_p97.5 = NA,
+      within10_mean = NA, within10_p2.5 = NA, within10_p97.5 = NA,
+      n = n
+    ))
+  }
+  # run B replicates
+  stats <- replicate(B, {
+    idx <- sample.int(n, n, replace = TRUE)
+    m <- metrics_once(y[idx], yhat[idx])
+    m
+  })
+  stats <- t(stats)
+  tibble(
+    mae_mean   = mean(stats[, "mae"], na.rm = TRUE),
+    mae_p2.5   = quantile(stats[, "mae"], 0.025, na.rm = TRUE, names = FALSE),
+    mae_p97.5  = quantile(stats[, "mae"], 0.975, na.rm = TRUE, names = FALSE),
+    rmse_mean  = mean(stats[, "rmse"], na.rm = TRUE),
+    rmse_p2.5  = quantile(stats[, "rmse"], 0.025, na.rm = TRUE, names = FALSE),
+    rmse_p97.5 = quantile(stats[, "rmse"], 0.975, na.rm = TRUE, names = FALSE),
+    pearson_mean  = mean(stats[, "pearson_r"], na.rm = TRUE),
+    pearson_p2.5  = quantile(stats[, "pearson_r"], 0.025, na.rm = TRUE, names = FALSE),
+    pearson_p97.5 = quantile(stats[, "pearson_r"], 0.975, na.rm = TRUE, names = FALSE),
+    within5_mean   = mean(stats[, "within_5"], na.rm = TRUE),
+    within5_p2.5   = quantile(stats[, "within_5"], 0.025, na.rm = TRUE, names = FALSE),
+    within5_p97.5  = quantile(stats[, "within_5"], 0.975, na.rm = TRUE, names = FALSE),
+    within10_mean  = mean(stats[, "within_10"], na.rm = TRUE),
+    within10_p2.5  = quantile(stats[, "within_10"], 0.025, na.rm = TRUE, names = FALSE),
+    within10_p97.5 = quantile(stats[, "within_10"], 0.975, na.rm = TRUE, names = FALSE),
+    n = n
+  )
+}
+
+# build combo_id in all_df to align with summary_df / rank_df
+to_chr <- function(x) if (is.numeric(x)) as.character(x) else as.character(x)
+
+all_df <- all_df %>%
+  mutate(
+    temperature = to_chr(temperature),
+    top_p       = to_chr(top_p),
+    top_k       = to_chr(top_k),
+    max_tokens  = to_chr(max_tokens),
+    batch_size  = to_chr(batch_size),
+    combo_id    = glue("T{temperature}_P{top_p}_K{top_k}_M{max_tokens}_B{batch_size}")
+  )
+
+# run bootstrap per combo
+B <- 200  # you can increase to 1000 if you need tighter CIs (cost ↑)
+boot_ci_df <- all_df %>%
+  group_by(combo_id, temperature, top_p, top_k, max_tokens, batch_size) %>%
+  group_modify(~ bootstrap_combo(.x, B = B)) %>%
+  ungroup()
+
+# merge with summary_df for reference metrics
+summary_df <- summary_df %>%
+  select(combo_id, mae, rmse, pearson_r, within_5, within_10,
+         avg_latency, missing_rate)
+
+boot_joined <- boot_ci_df %>%
+  left_join(summary_df, by = "combo_id")
+
+# save
+# boot_out <- file.path(base_dir, glue("music_tuning_bootstrap_{if (exists('experiment_type')) experiment_type else 'small16'}_scoring.csv"))
+# write_csv(boot_joined, boot_out)
+# cat("Bootstrap CI table saved to:\n", boot_out, "\n")
+
+# --------- Plot: Top-10 combos by your composite score with MAE CIs ---------
+if (exists("rank_df")) {
+  top10_ids <- rank_df %>%
+    slice_max(order_by = score_composite, n = 10, with_ties = FALSE) %>%
+    pull(combo_id)
+} else {
+  # fallback: top10 by MAE (lower better)
+  top10_ids <- summary_df %>% arrange(mae) %>% slice_head(n = 10) %>% pull(combo_id)
+}
+
+p_ci <- boot_joined %>%
+  filter(combo_id %in% top10_ids) %>%
+  mutate(combo_id = factor(combo_id, levels = top10_ids)) %>%
+  ggplot(aes(x = combo_id, y = mae_mean)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mae_p2.5, ymax = mae_p97.5), width = 0.15) +
+  coord_flip() +
+  labs(title = "Top-10 parameter combos: MAE with 95% bootstrap CI",
+       x = "Param combo", y = "MAE") +
+  theme_bw()
+print(p_ci)
+```

@@ -1,0 +1,544 @@
+---
+title: "LLM multiclass classification-smaller batch size"
+author: "Yiyu Wang"
+date: "23 July 2025"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document:
+    keep_tex: true
+    latex_engine: xelatex
+subparagraph: true
+urlcolor: blue
+linkcolor: black
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{booktabs}
+---
+
+```{r setup, eval = T, echo = F, message=F, warning=F, results='hide'}
+library(knitr)
+library(kableExtra)
+options(width=60)
+opts_chunk$set(echo = TRUE, comment="", error=FALSE, 
+               #cache.lazy = FALSE, 
+               fig.align="center", message=FALSE, warning=FALSE, tidy = FALSE)
+```
+
+## PART 3: Classification analysis - genre prediction
+## Pitchfork music reviews
+## 3.1 reduced classes experiment
+
+```{r packages}
+# Setup
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(reshape2)
+```
+
+```{r data-processing, eval = F}
+# load data
+music_data <- read.csv("data/pitchfork_reviews.csv")
+
+# define reduced multi-class mapping
+# maps 9 genres to 5 broader classes
+genre_map <- list(
+  'rock/metal' = c('rock', 'metal'),
+  'pop/r&b' = c('pop/r&b'),
+  'electronic/experimental' = c('electronic', 'experimental'),
+  'folk/country/global/jazz' = c('folk/country', 'global', 'jazz'),
+  'rap' = c('rap')
+)
+# function to map original genre to reduced class
+genre_reduce <- function(genre) {
+  for (k in names(genre_map)) {
+    if (genre %in% genre_map[[k]]) return(k)
+  }
+  return(NA)
+}
+
+music_data$genre_reduced <- sapply(tolower(music_data$genre), genre_reduce)
+reduced_classes <- unique(na.omit(music_data$genre_reduced))
+print(reduced_classes)
+
+# sample few-shot examples
+music_data_clean <- music_data[!is.na(music_data$genre), ]
+head(music_data_clean)
+set.seed(42)
+few_shot_examples <- list()
+few_shot_indices <- c()
+for (genre_class in names(genre_map)) {
+  examples <- music_data_clean %>% 
+    filter(genre_reduced == genre_class) %>%
+    sample_n(min(3, n()))
+    few_shot_examples[[genre_class]] <- examples
+    few_shot_indices <- c(few_shot_indices, as.integer(rownames(examples)))
+}
+
+# remove few-shot examples from dataset
+test_data <- music_data_clean[-few_shot_indices, ]
+
+# define a prompt
+# Build prompt with real examples
+example_texts <- c()
+for (genre_class in names(few_shot_examples)) {
+  for (i in 1:nrow(few_shot_examples[[genre_class]])) {
+    review_text<- few_shot_examples[[genre_class]]$review[i]
+    example_texts <- c(example_texts, sprintf("Review: '%s'\nGenre: %s", review_text, genre_class))
+  }
+}
+examples_block <- paste(example_texts, collapse = "\n\n")
+
+music_genre_prompt <- paste0(
+  "You are an expert AI music reviewer, designed to classify each music album into one of the following genres:",
+  paste(reduced_classes, collapse = ","), ".\n",
+  "Below are some example reviews and their corresponding genres:\n",
+  examples_block,
+  "\n\nI will provide you with a batch of 20 music reviews. Read each review closely and identify any words, phrases, or sentiments that might indicate the genre of the album. Then, assign one of genres listed above to each review.\n",
+  "IMPORTANT: you must only use these 5 genres listed above. Do not create new genres or use subgenres and variations.\n",
+  "If a review seems to fit multiple genres, choose the moset dominant one.\n",
+  "You must return exactly 20 genre labels, one per review, in a JSON array format.\n",
+  "If there are fewer or more than 20 genre labels, review and correct the response before returning it.\n",
+  "Example output: [\"rap\", \"rock/metal\", \"folk/country/global/jazz\", \"pop/r&b\", ...](exactly 20 genre labels).\n",
+  "Make sure the JSON array is correctly formatted before returning it. \n",
+  "Do not explain any reasoning. Do not include any explanations or additional text.\n"
+  )
+
+# API config
+url <- "https://api.together.xyz/v1/chat/completions"
+api_key <- Sys.getenv("TOGETHER_API_KEY")
+if (!nzchar(api_key)) {
+  stop("API key not found. Please set with Sys.setenv(TOGETHER_API_KEY='your_real_key')")
+}
+
+# define a function for genre classification
+get_music_llm_genres = function(batch_reviews, 
+                                batch_index = 1, 
+                                system_prompt = music_genre_prompt, 
+                                log_file = LOG_FILE) {
+  review_list <- paste0(seq_along(batch_reviews$review), ". ", batch_reviews$review, collapse = "\n")
+  system_prompted <- paste0(music_genre_prompt, "\n\n", review_list)
+  messages <- list(
+    list(role = "system", content = system_prompted)
+  )
+  response <- POST(
+    url,
+    add_headers(
+      Authorization = paste("Bearer", api_key),
+      `Content-Type` = "application/json"
+    ),
+    body = toJSON(list(
+      model = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      messages = messages,
+      max_tokens = 600,  # max length of output (in case it gets the prompt wrong and it talks for ages...)
+      temperature = 0.2, # lower for more deterministic
+      top_p = 0.9,  
+      top_k = 50,  
+      repetition_penalty = 1,
+      stop = list("<|eot_id|>", "<|eom_id|>"),
+      stream = FALSE  # Set to False to get the full response
+    ), auto_unbox = TRUE),
+    encode = "json"
+  )
+  response_content = content(response, as = "parsed", type = "application/json")
+  assistant_reply <- str_trim(response_content$choices[[1]]$message$content)
+  # cat("\n---\nLLM reply (", nchar(assistant_reply), " chars):\n", assistant_reply, "\n---\n")  
+  # useful to log during query development
+  log_message <- paste0(batch_index, ": lines n", assistant_reply)
+  write(log_message, file = log_file, append = TRUE)
+  # try the formatting
+  r_vector <- try(fromJSON(assistant_reply), silent = TRUE)
+  if (inherits(r_vector, "try-error")) {
+    genres = rep(NA, nrow(batch_reviews))
+  } else {
+    genres = as.character(r_vector)
+  }
+  return(genres)
+}
+
+# query the LLM
+# run llm classification on a sample batch
+set.seed(123)
+music_genre_sample <- test_data |> sample_n(20)
+# Create log file
+LOG_FILE <- file.path("logs", paste0("music_genre_", format(Sys.time(), "%Y-%m-%d-%H%M%S"), ".log"))
+dir.create("logs", showWarnings = FALSE)
+genres = get_music_llm_genres(music_genre_sample, system_prompt = music_genre_prompt, log_file = LOG_FILE)
+genres
+
+# process full dataset
+df <- test_data
+df$llm_genre <- NA
+batch_size <- 20
+LOG_FILE <- file.path("logs", paste0("music_genre_", format(Sys.time(), "%Y-%m-%d-%H%M%S"), ".log"))
+dir.create("logs", showWarnings = FALSE)
+
+for (i in seq(1, nrow(df), by = batch_size)) {
+  # get the batch of reviews
+  iis = i:min(i + batch_size - 1, nrow(df))
+  batch_reviews <- df[iis, ]
+  genres = get_music_llm_genres(batch_reviews, system_prompt = music_genre_prompt, batch_index = i, log_file = LOG_FILE)
+  
+  # accept results if we get the right number of genres
+  if (length(genres) == nrow(batch_reviews)) {
+    df$llm_genre[iis] <- genres
+  } else {
+    df$llm_genre[iis] <- NA
+  }
+  if((i-1) %% 200 == 0) cat(i, "\t")
+}
+
+# save the result
+save(df, file = "llm_results/class_music/music_review_genres.RData")
+
+# get missing scores
+missing_i_list = which(is.na(df$llm_genre))
+# make one final pass for those
+if (length(missing_i_list) > 0) {
+  cat("Processing", length(missing_i_list), "missing predictions...\n")
+
+  for (i in seq(1, length(missing_i_list), by = batch_size)) {
+    # Get the batch of reviews
+    iis = i:min(i + batch_size - 1, length(missing_i_list))
+    iis <- missing_i_list[iis]
+    batch_reviews <- df[iis, ]
+    genres = NULL
+    genres = get_music_llm_genres(batch_reviews, system_prompt = music_genre_prompt, log_file = LOG_FILE)
+    if (length(genres) == nrow(batch_reviews)) {
+      df$llm_genre[iis] <- genres
+    } else {
+      df$llm_genre[iis] <- NA
+    }
+    if((i-1) %% 100 == 0) cat("Retry processed", i, "reviews\n")
+  }
+}
+# save again
+save(df, file = "llm_results/class_music/music_review_genres.RData")
+# check and if the length is > 0 re-run lines 166 to 184
+length(which(is.na(df$llm_genre)))
+```
+
+```{r summarize}
+load("llm_results/class_music/music_review_genres.RData")
+# summary statistics
+cat("Total records:", nrow(df), "\n")
+cat("Records with genre:", sum(!is.na(df$llm_genre)), "\n")
+cat("Records with NA:", sum(is.na(df$llm_genre)), "\n")
+cat("Success rate:", round(sum(!is.na(df$llm_genre))/nrow(df)*100, 2), "%\n")
+# Genre distribution
+print(table(df$llm_genre, useNA = "ifany"))
+```
+
+```{r confusion-matrix}
+# compare with actual genre
+# confusion matrix
+tab <- table(Predicted = df$llm_genre, Actual = df$genre_reduced)
+print(tab)
+```
+
+
+```{r accuracy}
+# accuracy per genre
+genre_accuracy <- df %>% 
+  mutate(correct = llm_genre == genre_reduced) %>%
+  group_by(genre_reduced) %>%
+  summarise(accuracy = mean(correct, na.rm = TRUE), n = n())
+genre_accuracy
+```
+
+```{r}
+# overall accuracy
+overall_accuracy <- mean(df$llm_genre == df$genre_reduced, na.rm = TRUE)
+cat("Overall genre classification accuracy:", round(overall_accuracy * 100, 2), "%\n")
+```
+
+```{r plot3}
+# visualize confusion matrix
+tab_melt <- melt(tab)
+p3 <- tab_melt %>%
+  ggplot(aes(x = Actual, y = Predicted, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  geom_text(aes(label = value), color = "black", size = 4) +
+  labs(title = "LLM genre classification confusion matrix", x = "Actual Genre", y = "Predicted Genre") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_text(face = "bold"),
+        axis.title.y = element_text(face = "bold"))
+p3
+```
+
+```{r plot4}
+# visualize accuracy per genre
+p4 <- genre_accuracy %>%
+  ggplot(aes(x = reorder(genre_reduced, -accuracy), y = accuracy * 100, fill = genre_reduced)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  geom_text(aes(label = sprintf("%.1f%%", accuracy * 100)), vjust = -0.5, size = 3) +
+  labs(x = "Genre", y = "Accuracy (%)", title = "LLM genre classification accuracy by genre") +
+  theme_minimal()
+p4
+```
+
+## 3.2 improved prompt
+## multiclass classification - smaller batch size
+
+```{r data processing, eval = F}
+# load data
+music_data <- read.csv("data/pitchfork_reviews.csv")
+
+# define reduced multi-class mapping
+# maps 9 genres to 5 broader classes
+genre_map <- list(
+  'rock/metal' = c('rock', 'metal'),
+  'pop/r&b' = c('pop/r&b'),
+  'electronic/experimental' = c('electronic', 'experimental'),
+  'folk/country/global/jazz' = c('folk/country', 'global', 'jazz'),
+  'rap' = c('rap')
+)
+# function to map original genre to reduced class
+genre_reduce <- function(genre) {
+  for (k in names(genre_map)) {
+    if (genre %in% genre_map[[k]]) return(k)
+  }
+  return(NA)
+}
+
+music_data$genre_reduced <- sapply(tolower(music_data$genre), genre_reduce)
+reduced_classes <- unique(na.omit(music_data$genre_reduced))
+print(reduced_classes)
+
+# sample few-shot examples
+music_data_clean <- music_data[!is.na(music_data$genre), ]
+head(music_data_clean)
+set.seed(42)
+few_shot_examples <- list()
+few_shot_indices <- c()
+for (genre_class in names(genre_map)) {
+  examples <- music_data_clean %>% 
+    filter(genre_reduced == genre_class) %>%
+    sample_n(min(5, n()))
+    few_shot_examples[[genre_class]] <- examples
+    few_shot_indices <- c(few_shot_indices, as.integer(rownames(examples)))
+}
+
+# remove few-shot examples from dataset
+test_data <- music_data_clean[-few_shot_indices, ]
+
+# define a prompt
+# Build prompt with real examples
+example_texts <- c()
+for (genre_class in names(few_shot_examples)) {
+  for (i in 1:nrow(few_shot_examples[[genre_class]])) {
+    review_text<- few_shot_examples[[genre_class]]$review[i]
+    example_texts <- c(example_texts, sprintf("Review: '%s'\nGenre: %s", review_text, genre_class))
+  }
+}
+examples_block <- paste(example_texts, collapse = "\n\n")
+
+music_genre_prompt <- paste0(
+  "You are an expert AI music reviewer, designed to classify each music album review into ONE AND ONLY ONE of the following 5 genres:\n",
+  paste0("[", paste(reduced_classes, collapse = ","),"]"), ".\n",
+  "Below are some example reviews and their corresponding genres:\n",
+  examples_block,
+  "\n\n",
+  "I will provide you with a batch of 10 music reviews. Read each review closely and identify any words, phrases, or sentiments that might indicate the genre of the album. Then, assign ONE of 5 genres listed above to each review.\n",
+  "CRITICAL RULES:\n",
+  "- You MUST choose ONLY from these 5 genres listed above. NEVER invent new genres, combine genres, or use subgenres or variations.\n",
+  "- If a review seems to fit multiple genres, choose the moset dominant one from the list above.\n",
+  "- If unsure, pick the closet genre from the list above.\n",
+  "- If your answer is not exactly one of these: rock/metal, pop/r&b, electronic/experimental, folk/country/global/jazz, rap, review and correct the answer before returning it.\n",
+  "- NEVER use genres like 'comedy', 'grime', 'indie/r&b', 'metal/rock', or any genre not in the list above.\n\n",
+  "You must return exactly 10 genre labels, one per review, in a JSON array format.\n",
+  "If there are fewer or more than 10 genre labels, review and correct the response before returning it.\n",
+  "Example output: [\"rap\", \"rock/metal\", \"folk/country/global/jazz\", \"pop/r&b\", ...](exactly 10 genre labels).\n",
+  "Make sure the JSON array is correctly formatted before returning it. \n",
+  "Do not explain any reasoning. DO NOT include any explanations or additional text.\n"
+  )
+
+
+# API config
+url <- "https://api.together.xyz/v1/chat/completions"
+api_key <- Sys.getenv("TOGETHER_API_KEY")
+if (!nzchar(api_key)) {
+  stop("API key not found. Please set with Sys.setenv(TOGETHER_API_KEY='your_real_key')")
+}
+
+# define a function for genre classification
+get_music_llm_genres = function(batch_reviews, 
+                                batch_index = 1, 
+                                system_prompt = music_genre_prompt, 
+                                log_file = LOG_FILE) {
+  review_list <- paste0(seq_along(batch_reviews$review), ". ", batch_reviews$review, collapse = "\n")
+  system_prompted <- paste0(music_genre_prompt, "\n\n", review_list)
+  messages <- list(
+    list(role = "system", content = system_prompted)
+  )
+  response <- POST(
+    url,
+    add_headers(
+      Authorization = paste("Bearer", api_key),
+      `Content-Type` = "application/json"
+    ),
+    body = toJSON(list(
+      model = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      messages = messages,
+      max_tokens = 600,  # max length of output (in case it gets the prompt wrong and it talks for ages...)
+      temperature = 0.05, # lower for more deterministic
+      top_p = 0.9,  
+      top_k = 50,  
+      repetition_penalty = 1,
+      stop = list("<|eot_id|>", "<|eom_id|>"),
+      stream = FALSE  # Set to False to get the full response
+    ), auto_unbox = TRUE),
+    encode = "json"
+  )
+  response_content = content(response, as = "parsed", type = "application/json")
+  assistant_reply <- str_trim(response_content$choices[[1]]$message$content)
+  # cat("\n---\nLLM reply (", nchar(assistant_reply), " chars):\n", assistant_reply, "\n---\n")  
+  # useful to log during query development
+  log_message <- paste0(batch_index, ": lines n", assistant_reply)
+  write(log_message, file = log_file, append = TRUE)
+  # try the formatting
+  r_vector <- try(fromJSON(assistant_reply), silent = TRUE)
+  if (inherits(r_vector, "try-error")) {
+    genres = rep(NA, nrow(batch_reviews))
+  } else {
+    genres = as.character(r_vector)
+  }
+  return(genres)
+}
+
+# query the LLM
+# run llm classification on a sample batch
+set.seed(123)
+music_genre_sample <- test_data |> sample_n(10)
+# Create log file
+LOG_FILE <- file.path("logs", paste0("music_genre_10batch_", format(Sys.time(), "%Y-%m-%d-%H%M%S"), ".log"))
+dir.create("logs", showWarnings = FALSE)
+genres = get_music_llm_genres(music_genre_sample, system_prompt = music_genre_prompt, log_file = LOG_FILE)
+genres
+
+# process full dataset
+df <- test_data
+df$llm_genre <- NA
+batch_size <- 10
+LOG_FILE <- file.path("logs", paste0("music_genre_10batch_", format(Sys.time(), "%Y-%m-%d-%H%M%S"), ".log"))
+dir.create("logs", showWarnings = FALSE)
+
+for (i in seq(1, nrow(df), by = batch_size)) {
+  # get the batch of reviews
+  iis = i:min(i + batch_size - 1, nrow(df))
+  batch_reviews <- df[iis, ]
+  genres = get_music_llm_genres(batch_reviews, system_prompt = music_genre_prompt, batch_index = i, log_file = LOG_FILE)
+  
+  # accept results if we get the right number of genres
+  if (length(genres) == nrow(batch_reviews)) {
+    df$llm_genre[iis] <- genres
+  } else {
+    df$llm_genre[iis] <- NA
+  }
+  if((i-1) %% 200 == 0) cat(i, "\t")
+}
+
+# save the result
+save(df, file = "llm_results/class_music/music_review_genres_10batch.RData")
+
+# get missing scores
+missing_i_list = which(is.na(df$llm_genre))
+# make one final pass for those
+if (length(missing_i_list) > 0) {
+  cat("Processing", length(missing_i_list), "missing predictions...\n")
+
+  for (i in seq(1, length(missing_i_list), by = batch_size)) {
+    # Get the batch of reviews
+    iis = i:min(i + batch_size - 1, length(missing_i_list))
+    iis <- missing_i_list[iis]
+    batch_reviews <- df[iis, ]
+    genres = NULL
+    genres = get_music_llm_genres(batch_reviews, system_prompt = music_genre_prompt, log_file = LOG_FILE)
+    if (length(genres) == nrow(batch_reviews)) {
+      df$llm_genre[iis] <- genres
+    } else {
+      df$llm_genre[iis] <- NA
+    }
+    if((i-1) %% 100 == 0) cat("Retry processed", i, "reviews\n")
+  }
+}
+# save again
+save(df, file = "llm_results/class_music/music_review_genres_10batch.RData")
+# check and if the length is > 0 re-run lines 166 to 184
+length(which(is.na(df$llm_genre)))
+```
+
+```{r}
+load("llm_results/class_music/music_review_genres_10batch.RData")
+# summary statistics
+cat("Total records:", nrow(df), "\n")
+cat("Records with genre:", sum(!is.na(df$llm_genre)), "\n")
+cat("Records with NA:", sum(is.na(df$llm_genre)), "\n")
+cat("Success rate:", round(sum(!is.na(df$llm_genre))/nrow(df)*100, 2), "%\n")
+# Genre distribution
+print(table(df$llm_genre, useNA = "ifany"))
+```
+
+```{r result}
+# compare with actual genre
+# confusion matrix
+tab <- table(Predicted = df$llm_genre, Actual = df$genre_reduced)
+print(tab)
+```
+
+```{r}
+# accuracy per genre
+genre_accuracy <- df %>% 
+  mutate(correct = llm_genre == genre_reduced) %>%
+  group_by(genre_reduced) %>%
+  summarise(accuracy = mean(correct, na.rm = TRUE), n = n())
+genre_accuracy
+```
+
+```{r}
+# overall accuracy
+overall_accuracy <- mean(df$llm_genre == df$genre_reduced, na.rm = TRUE)
+cat("\nOverall genre classification accuracy:", round(overall_accuracy * 100, 2), "%\n")
+```
+
+```{r p_1}
+# visualize confusion matrix
+library(ggplot2)
+tab_melt <- melt(tab)
+p_1 <- tab_melt %>%
+  ggplot(aes(x = Actual, y = Predicted, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  geom_text(aes(label = value), color = "black", size = 4) +
+  labs(title = "LLM genre classification confusion matrix (improved prompt)", x = "Actual Genre", y = "Predicted Genre") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_text(face = "bold"),
+        axis.title.y = element_text(face = "bold"))
+p_1
+```
+
+```{r p_2}
+# visualize accuracy per genre
+p_2 <- genre_accuracy %>%
+  ggplot(aes(x = reorder(genre_reduced, -accuracy), y = accuracy * 100, fill = genre_reduced)) +
+  geom_bar(stat = "identity", alpha = 0.8) +
+  geom_text(aes(label = sprintf("%.1f%%", accuracy * 100)), vjust = -0.5, size = 3) +
+  labs(x = "Genre", y = "Accuracy (%)", title = "LLM genre classification accuracy by genre") +
+  theme_minimal()
+p_2
+```
+
+
+
+
+
+
+

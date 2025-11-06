@@ -1,0 +1,12 @@
+{
+  "base_url": "/",
+  "hostname": "localhost",
+  "notebook_dir": "/nfs/a319/gy17m2a/INTEGRATE",
+  "password": false,
+  "pid": 30653,
+  "port": 7383,
+  "secure": false,
+  "sock": "",
+  "token": "77025acee93b38cee936292bafd98e9620d8dd4ac9a612cc",
+  "url": "http://localhost:7383/"
+}

@@ -1,0 +1,531 @@
+---
+title: "binary analysis-LLMs"
+author: "Yiyu Wang"
+date: "July 2025"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document:
+    keep_tex: true
+    latex_engine: xelatex
+subparagraph: true
+urlcolor: blue
+linkcolor: black
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{booktabs}
+---
+
+```{r setup, eval = T, echo = F, message=F, warning=F, results='hide'}
+library(knitr)
+library(kableExtra)
+options(width=60)
+opts_chunk$set(echo = TRUE, comment="", error=FALSE, 
+               #cache.lazy = FALSE, 
+               fig.align="center", message=FALSE, warning=FALSE, tidy = FALSE)
+```
+
+## LLM-based Analysis for Restaurant, Movie and Music Reviews
+## PART 1: Binary Analysis
+## 1.1 LLM analysis - restaurant reviews
+
+```{r codeblock}
+### Setup
+library(tidyverse)
+library(httr)
+library(jsonlite)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(readr)
+library(knitr)
+```
+
+```{r, eval=FALSE}
+## load  restaurant review data
+restaurant_data <- read.csv("data/restuarant_review_binary.csv")
+head(restaurant_data)
+dim(restaurant_data)
+
+### LLM analysis: binary classification.
+
+# 1. define a prompt
+restaurant_system_prompt <- paste0(
+  "You are an AI designed to assess sentiment in restaurant reviews.\n",
+  "I will provide you with a batch of 20 restaurant reviews. Your task is to analyze each review and determine whether the reviewer liked the restaurant (1) or did not like it (0).\n",
+  "Specifically: Read each review closely and identify any words, phrases, or sentiments that indicate positive or negative sentiment about the restaurant experience.\n",
+  "Consider:\n",
+  "- Food quality and taste\n",
+  "- Service quality\n",
+  "- Atmosphere and ambiance\n",
+  "- Value for money\n",
+  "- Overall satisfaction\n",
+  "\n\nAssign a score (0 or 1), where: 1 = The reviewer liked the restaurant; 0 = The reviewer did not like the restaurant.\n",
+  "DO NOT explain any reasoning. Please return exactly 20 scores, without any additional explanation or commentary.\n",
+  "You must return exactly 20 binary scores (0 or 1), one per review, in a structured format.\n",
+  "The output should be a JSCON array of exactly 20 numbers.\n",
+  "If there are fewer or more than 20 scores, review and correct the response before returning it.\n",
+  "Example output: [1, 0, 1, 1, 0, ...] (exactly 20 numbers).\n",
+  "Make sure the JSON array is correctly formatted before returnning it.\n"
+  )
+
+# 2. API configurations
+url <- "https://api.together.xyz/v1/chat/completions"
+api_key <- Sys.getenv("TOGETHER_API_KEY")
+if (!nzchar(api_key)) {
+  stop("API key not found. Please set with Sys.setenv(TOGETHER_API_KEY='your_real_key')")
+}
+
+# 3. define a function
+# function to get LLM sentiment scores for restaurant reviews
+get_restaurant_sentiment_scores = function(batch_reviews, 
+                                    batch_index = 1, 
+                                    system_prompt = restaurant_system_prompt, 
+                                    log_file = LOG_FILE) {
+  
+  review_list <- paste0(seq_along(batch_reviews$Review), ". ", batch_reviews$Review, collapse = "\n")
+  system_prompted <- paste0(restaurant_system_prompt, "\n\n", review_list)
+  
+  messages <- list(
+    list(role = "system", content = system_prompted)
+  )
+  response <- POST(
+    url,
+    add_headers(
+      Authorization = paste("Bearer", api_key),
+      `Content-Type` = "application/json"
+    ),
+    body = toJSON(list(
+      model = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      messages = messages,
+      max_tokens = 100,  # max length of output (in case it gets the prompt wrong and it talks for ages...)
+      temperature = 0.2, # lower for more deterministic
+      top_p = 0.9,  
+      top_k = 50,  
+      repetition_penalty = 1,
+      stop = list("<|eot_id|>", "<|eom_id|>"),
+      stream = FALSE  # Set to False to get the full response
+    ), auto_unbox = TRUE),
+    encode = "json"
+  )
+  # Convert response to a list
+  response_content = content(response, as = "parsed", type = "application/json")
+  assistant_reply <- str_trim(response_content$choices[[1]]$message$content)
+  
+  # # useful to log during query development
+  log_message <- paste0(batch_index, ": lines n", assistant_reply)
+  write(log_message, file = log_file, append = TRUE)
+  
+  # try the formatting
+  r_vector <- try(fromJSON(assistant_reply), silent = TRUE)
+  if (inherits(r_vector, "try-error")) {
+    scores = rep(NA, nrow(batch_reviews))
+  } else {
+    scores = as.numeric(as.character(r_vector))
+  }
+  return(scores)
+}
+
+# 4. query the LLM: example
+# Test with a small sample first
+set.seed(123)
+batch_reviews <- restaurant_data |> sample_n(20)
+# create a log file - create a folder called 'logs' in the working directory 
+LOG_FILE <- file.path("logs", paste0("restaurant_analysis_", format(Sys.time(), "%Y-%m-%d-%H%M%S"), ".log"))
+dir.create("logs", showWarnings = FALSE)
+# then run the LLM
+scores = get_restaurant_sentiment_scores(batch_reviews, batch_index = 1, system_prompt = restaurant_system_prompt, log_file = LOG_FILE) 
+scores
+
+# 5. repeat analysis (10 times) & record misclassifications
+num_runs <- 10
+accuracy_list <- numeric(num_runs)
+misclassified_list <- vector("list", num_runs)
+predictions_matrix <- matrix(NA, nrow = nrow(restaurant_data), ncol = num_runs)
+
+for (run in 1:num_runs) {
+  cat("Run", run, "\n")
+  set.seed(123 + run) # different seed for each run
+  # data
+  df <- restaurant_data
+  df$g_score <- NA
+  # log file
+  LOG_FILE <- file.path("logs", paste0("restaurant_analysis_run", run, "_", format(Sys.time(), "%Y-%m-%d-%H%M%S"), ".log"))
+  dir.create("logs", showWarnings = FALSE)
+  # batch processing
+  batch_size <- 20
+  
+  for (i in seq(1, nrow(df), by = batch_size)) {
+    # get the batch of reviews
+    iis = i:min(i + batch_size - 1, nrow(df))
+    batch_reviews <- df[iis, ]
+    scores = NULL
+    scores = get_restaurant_sentiment_scores(batch_reviews, system_prompt = restaurant_system_prompt,log_file = LOG_FILE)
+    # check return NA if any missing
+    if (length(scores) == nrow(batch_reviews) & is.numeric(scores)) {
+      df$g_score[iis] <- scores
+    } else {
+      df$g_score[iis] <- NA
+    }
+    if((i-1) %% 100 == 0) cat(i, "\t")
+  }
+  # get missing scores
+  missing_i_list = which(is.na(df$g_score))
+  # make one final pass for those
+  if (length(missing_i_list) > 0) {
+    for (i in seq(1, length(missing_i_list), by = batch_size)) {
+      iis = i:min(i + batch_size - 1, length(missing_i_list))
+      iis <- missing_i_list[iis]
+      batch_reviews <- df[iis, ]
+      scores = NULL
+      scores = get_restaurant_sentiment_scores(batch_reviews, system_prompt = restaurant_system_prompt, log_file = LOG_FILE)
+      if (length(scores) == nrow(batch_reviews) & is.numeric(scores)) {
+        df$g_score[iis] <- scores
+      } else {
+        df$g_score[iis] <- NA
+      }
+    }
+  }
+  # save predictions for this run
+  predictions_matrix[, run] <- df$g_score
+  write_csv(df[, c("Review", "Liked", "g_score")], 
+            sprintf("llm_results/binary_restaurant_reviews/restaurant_llm_predictions_run%02d.csv", run))
+  # save(df, file = sprintf("llm_results/binary_restaurant_reviews/resturant_llm_predictions_run%02d.RData", run))
+  
+  # evaluate
+  accuracy <- mean(df$g_score == df$Liked, na.rm = TRUE)
+  accuracy_list[run] <- accuracy
+  misclassified <- which(df$g_score != df$Liked & !is.na(df$g_score))
+  misclassified_list[[run]] <- misclassified
+  cat(sprintf("Run %d accuracy: %.2f%%\n", run, accuracy * 100))
+}
+
+## Save results
+# 1) summary - 10 runs
+summary_df <- data_frame(Run = 1:num_runs,
+                         Accuracy = round(accuracy_list * 100, 2),
+                         Misclassified = sapply(misclassified_list, function(x) paste(x, collapse = ", "))
+                         )
+write_csv(summary_df, "llm_results/binary_restaurant_reviews/restaurant_llm_analysis_10run_summary.csv")
+
+# 2) save all predictions matrix
+predictions_df <- as_data_frame(predictions_matrix)
+colnames(predictions_df) <- paste0("Run", 1:num_runs)
+predictions_df$Review <- restaurant_data$Review
+predictions_df$Liked <- restaurant_data$Liked
+predictions_df <- predictions_df[, c("Review", "Liked", paste0("Run", 1:num_runs))]
+write_csv(predictions_df, "llm_results/binary_restaurant_reviews/restaurant_llm_all_predictions.csv")
+head(predictions_df)
+```
+
+### Summarize results - restaurant reviews
+```{r accuracy_summary}
+# load data
+preds_df <- read_csv("llm_results/binary_restaurant_reviews/restaurant_llm_all_predictions.csv")
+# Ensure types
+pred_cols <- grep("^Run\\d+$", names(preds_df), value = TRUE)
+preds_df  <- preds_df %>% mutate(Liked = as.numeric(Liked))
+stopifnot(length(pred_cols) > 0)
+
+### Per-run accuracy + overall average
+acc_vec <- sapply(pred_cols, function(col) {
+  mean(preds_df[[col]] == preds_df$Liked, na.rm = TRUE)
+})
+
+summary_df <- tibble(
+  Run       = as.integer(sub("^Run", "", pred_cols)),
+  Accuracy  = round(100 * acc_vec, 2)
+) %>% arrange(Run)
+
+average_accuracy <- mean(acc_vec)
+
+kable(summary_df, caption = "Per-run accuracy (%)")
+```
+
+```{r}
+cat(sprintf("Average accuracy over %d runs: %.2f%%\n",
+            length(pred_cols), 100 * average_accuracy))
+```
+
+```{r misclassification}
+### always & sometimes misclassified
+# TRUE if misclassified on that run; NA stays NA
+mis_mat <- sapply(pred_cols, function(col) {
+  ifelse(is.na(preds_df[[col]]), NA, preds_df[[col]] != preds_df$Liked)
+})
+
+# Count misclassifications per row across runs (ignoring NA)
+mis_counts <- rowSums(mis_mat, na.rm = TRUE)
+
+always_idx    <- which(mis_counts == length(pred_cols))
+sometimes_idx <- which(mis_counts > 0)
+
+cat("Number of reviews always misclassified:", length(always_idx), "\n")
+cat("Indices:", if (length(always_idx)) paste(always_idx, collapse = ", ") else "(none)", "\n")
+cat("Number of reviews sometimes misclassified:", length(sometimes_idx), "\n")
+```
+
+```{r}
+# reviews that always misclassified
+df_always_misclassified <- tibble(
+  Review              = preds_df$Review[always_idx],
+  Liked               = preds_df$Liked[always_idx],
+  Misclassified_times = mis_counts[always_idx]
+)
+
+kable(df_always_misclassified, caption = "Always misclassified reviews")
+```
+
+```{r save, eval=FALSE}
+# Save: table - always misclassified reviews
+write_csv(df_always_misclassified, "llm_results/binary_restaurant_reviews/restaurant_always_misclassified.csv")
+```
+
+## PART 1: Binary Analysis
+## 1.2 LLM analysis - movie reviews
+
+```{r, eval=FALSE}
+# load data
+movie_data <- read.csv("data/movie_review_binary.csv")
+head(movie_data)
+dim(movie_data)
+
+# 1. define the system prompt for movie sentiment analysis
+movie_system_prompt <- "You are an AI designed to assess sentiment in movie reviews. 
+I will provide you with a batch of 20 movie reviews. Your task is to analyze each review and determine whether the reviewer liked the movie (1) or did not like it (0).
+Specifically: Read each review closely and identify any words, phrases, or sentiments that indicate positive or negative sentiment about the movie.
+Consider:
+- Overall enjoyment and satisfaction
+- Acting quality and performances
+- Plot and storytelling
+- Direction and cinematography
+- Special effects and technical aspects
+- Entertainment value
+- Recommendation to others
+
+Please returen exactly 20 binary scores (0 or 1), one per review, where: 1 = The reviewer liked the movie (positive sentiment); 0 = The reviewer did not like the movie (negative sentiment).
+Do not explain any reasoning. 
+
+You must return exactly 20 scores in a JSCON array format.
+If there are fewer or more than 20 scores, review and correct the response before returning it.
+Example output: [1, 0, 1, 1, 0, ...] (exactly 20 numbers).
+Make sure the JSON array is correctly formatted before returnning it.
+Do not inclue any explanations or additional text."
+
+# 2. Set up API configuration
+url <- "https://api.together.xyz/v1/chat/completions"
+api_key <- Sys.getenv("TOGETHER_API_KEY")
+if (!nzchar(api_key)) {
+  stop("API key not found. Please set with Sys.setenv(TOGETHER_API_KEY='your_real_key')")
+}
+
+
+# 3. Function to get LLM sentiment scores for movie reviews
+get_movie_sentiment_scores = function(batch_reviews, 
+                                      batch_index = 1, 
+                                      system_prompt = movie_system_prompt, 
+                                      log_file = LOG_FILE) {
+  review_list <- paste0(seq_along(batch_reviews$review), ". ", batch_reviews$review, collapse = "\n")
+  system_prompted <- paste0(movie_system_prompt, "\n\n", review_list)
+  
+  messages <- list(
+    list(role = "system", content = system_prompted)
+  )
+  response <- POST(
+    url,
+    add_headers(
+      Authorization = paste("Bearer", api_key),
+      `Content-Type` = "application/json"
+    ),
+    body = toJSON(list(
+      model = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      messages = messages,
+      max_tokens = 100,  # max length of output (in case it gets the prompt wrong and it talks for ages...)
+      temperature = 0.2, # lower for more deterministic
+      top_p = 0.9,  
+      top_k = 50,  
+      repetition_penalty = 1,
+      stop = list("<|eot_id|>", "<|eom_id|>"),
+      stream = FALSE  # Set to False to get the full response
+    ), auto_unbox = TRUE),
+    encode = "json"
+  )
+  # Convert response to a list
+  response_content = content(response, as = "parsed", type = "application/json")
+  assistant_reply <- str_trim(response_content$choices[[1]]$message$content)
+  
+  # # useful to log during query development
+  log_message <- paste0(batch_index, ": lines n", assistant_reply)
+  write(log_message, file = log_file, append = TRUE)
+  
+  # try the formatting
+  r_vector <- try(fromJSON(assistant_reply), silent = TRUE)
+  if (inherits(r_vector, "try-error")) {
+    scores = rep(NA, nrow(batch_reviews))
+  } else {
+    scores = as.numeric(as.character(r_vector))
+  }
+  return(scores)
+}
+
+# 4. query the LLM: example
+# test with a small sample first
+set.seed(123)
+test_batch <- movie_data |> sample_n(20)
+# create a log file - create a folder called 'logs' in the working directory 
+LOG_FILE <- file.path("logs", paste0("movie_analysis_", format(Sys.time(), "%Y-%m-%d-%H%M%S"), ".log"))
+dir.create("logs", showWarnings = FALSE)
+# then run the LLM
+scores = get_movie_sentiment_scores(test_batch, batch_index = 1, system_prompt = movie_system_prompt, log_file = LOG_FILE) 
+scores
+
+# 5. repeat analysis (10 times) & record misclassifications
+num_runs <- 10
+accuracy_list <- numeric(num_runs)
+misclassified_list <- vector("list", num_runs)
+predictions_matrix <- matrix(NA, nrow = nrow(movie_data), ncol = num_runs)
+
+for (run in 1:num_runs) {
+  cat("Run", run, "\n")
+  set.seed(123 + run)
+  df <- movie_data
+  df$g_score <- NA
+  LOG_FILE <- file.path("logs", paste0("movie_analysis_run", run, "_", format(Sys.time(), "%Y-%m-%d-%H%M%S"), ".log"))
+  dir.create("logs", showWarnings = FALSE)
+  batch_size <- 20
+
+  for (i in seq(1, nrow(df), by = batch_size)) {
+    iis = i:min(i + batch_size - 1, nrow(df))
+    batch_reviews <- df[iis, ]
+    scores = NULL
+    scores = get_movie_sentiment_scores(batch_reviews, system_prompt = movie_system_prompt, log_file = LOG_FILE) 
+    if (length(scores) == nrow(batch_reviews) & is.numeric(scores)) {
+      df$g_score[iis] <- scores 
+    } else {
+      df$g_score[iis] <- NA
+    } 
+    if((i-1) %% 100 == 0) cat(i, "\t")
+  }
+  # Handle missing
+  missing_i_list = which(is.na(df$g_score))
+  if (length(missing_i_list) > 0) {
+    for (i in seq(1, length(missing_i_list), by = batch_size)) {
+      iis = i:min(i + batch_size - 1, length(missing_i_list))
+      iis <- missing_i_list[iis]
+      batch_reviews <- df[iis, ]
+      scores = NULL
+      scores = get_movie_sentiment_scores(batch_reviews, system_prompt = movie_system_prompt, log_file = LOG_FILE) 
+      if (length(scores) == nrow(batch_reviews) & is.numeric(scores)) {
+        df$g_score[iis] <- scores 
+      } else {
+        df$g_score[iis] <- NA
+      } 
+    }
+  }
+  # Save predictions for this run
+  predictions_matrix[, run] <- df$g_score
+  write_csv(df[, c("id", "review", "sentiment", "g_score")], 
+            sprintf("llm_results/binary_movie_reviews/movie_llm_predictions_run%02d.csv", run))
+  # save(df, file = sprintf("movie_llm_predictions_run%02d.RData", run))
+  # Evaluate
+  accuracy <- mean(df$g_score == df$sentiment, na.rm = TRUE)
+  accuracy_list[run] <- accuracy
+  misclassified <- which(df$g_score != df$sentiment & !is.na(df$g_score))
+  misclassified_list[[run]] <- misclassified
+  cat(sprintf("Run %d accuracy: %.2f%%\n", run, accuracy * 100))
+}
+
+## Save results
+# 1) summary - 10 runs
+summary_df <- data_frame(Run = 1:num_runs,
+                         Accuracy = round(accuracy_list * 100, 2),
+                         Misclassified = sapply(misclassified_list, function(x) paste(x, collapse = ", "))
+                         )
+write_csv(summary_df, "llm_results/binary_movie_reviews/movie_llm_analysis_10run_summary.csv")
+# write_csv(data_frame(SometimesMis = sometimes_misclassified), 
+#           "llm_results/binary_movie_reviews/movie_sometimes_misclassified.csv")
+
+# 2) save all predictions matrix
+predictions_df <- as_data_frame(predictions_matrix)
+colnames(predictions_df) <- paste0("Run", 1:num_runs)
+predictions_df$id <- movie_data$id
+predictions_df$review <- movie_data$review
+predictions_df$sentiment <- movie_data$sentiment
+predictions_df <- predictions_df[, c("id", "review", "sentiment", paste0("Run", 1:num_runs))]
+write_csv(predictions_df, "llm_results/binary_movie_reviews/movie_llm_all_predictions.csv")
+head(predictions_df)
+```
+
+### Sumarise results - movie
+```{r accuracy_movie}
+# load data- movie
+preds_df_movie <- read_csv("llm_results/binary_movie_reviews/movie_llm_all_predictions.csv")
+# Ensure types
+pred_movie_cols <- grep("^Run\\d+$", names(preds_df_movie), value = TRUE)
+preds_movie_df  <- preds_df_movie %>% mutate(sentiment = as.numeric(sentiment))
+stopifnot(length(pred_cols) > 0)
+
+# accuracy - per run
+acc_vec <- sapply(pred_movie_cols, function(col) {
+  mean(preds_movie_df[[col]] == preds_movie_df$sentiment, na.rm = TRUE)
+})
+
+summary_df_movie <- tibble(
+  Run      = as.integer(sub("^Run", "", pred_movie_cols)),
+  Accuracy = round(100 * acc_vec, 2)
+) %>% arrange(Run)
+
+average_accuracy_movie <- mean(acc_vec)
+
+kable(summary_df_movie, caption = "Movie reviews — per-run accuracy (%)")
+```
+
+```{r}
+cat(sprintf("Average accuracy over %d runs: %.2f%%\n",
+            length(pred_cols), 100 * average_accuracy_movie))
+```
+
+```{r misclass-movie}
+# TRUE if misclassified, NA if prediction was NA
+mis_mat <- sapply(pred_movie_cols, function(col) {
+  ifelse(is.na(preds_movie_df[[col]]), NA, preds_movie_df[[col]] != preds_movie_df$sentiment)
+})
+
+mis_counts    <- rowSums(mis_mat, na.rm = TRUE)           # number of runs misclassified
+not_na_counts <- rowSums(!is.na(mis_mat))                 # number of runs with a prediction
+
+# Strict “always misclassified”: wrong on every run with no NAs at all
+always_idx    <- which(mis_counts == length(pred_movie_cols) & not_na_counts == length(pred_movie_cols))
+sometimes_idx <- which(mis_counts > 0)
+
+cat("Number of reviews always misclassified:", length(always_idx), "\n")
+cat("Number of reviews sometimes misclassified:", length(sometimes_idx), "\n")
+```
+
+```{r}
+df_always_misclassified_movie <- tibble(
+  ID                  = preds_movie_df$id[always_idx],
+  Review              = preds_movie_df$review[always_idx],
+  Sentiment           = preds_movie_df$sentiment[always_idx],
+  Misclassified_times = mis_counts[always_idx]
+)
+
+# kable(df_always_misclassified_movie, caption = "Movie reviews — always misclassified")
+head(df_always_misclassified_movie)
+```
+
+```{r save_movie_misclass, eval=FALSE}
+# always misclassified
+write_csv(df_always_misclassified_movie, "llm_results/binary_movie_reviews/movie_always_misclassified.csv")
+```
+
+
+
+
+
+
+
+
+

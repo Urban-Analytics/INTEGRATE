@@ -1,0 +1,56 @@
+title: INTEGRATE
+author: Alexis Comber, Bui Thanh, Nick Malleson, Minh Le Kieu, Hang Nguyen
+logo: ./assets/logo.jpg
+
+# Email / Social media user names used by the minima theme:
+# All of these are optional and can be removed or commented out
+email: "XXX@leeds.ac.uk"
+
+#facebook_username: username
+#flickr_username: username
+#instagram_username: username
+#pinterest_username: username
+#youtube_username: username
+#googleplus_username: +username
+
+#########################################################################################
+######### Nothing below needs to be changed (unless you know what you're doing) #########
+#########################################################################################
+theme: "minima"
+
+header_pages:
+- papers.md
+- presentations.md
+
+repository:
+  url: https://github.com/Urban-Analytics/INTEGRATE
+
+# baseurl: 'baseurl/' # if you're using custom domain keep this blank example: baseurl: ''
+
+kramdown:
+  syntax_highlighter_opts:
+    disable: true
+    
+plugins:
+  - jekyll-feed
+  - jekyll-sitemap
+  - jekyll-seo-tag # if you added it
+  - jekyll-toc
+
+
+
+titles_from_headings:
+ strip_title: true
+ collections: true
+
+defaults:
+  - scope:
+      path: ""
+      type: post
+    values:
+      tags: Other
+
+
+# at the top (or anywhere) of docs/_config.yml
+exclude:
+  - "references.bib"

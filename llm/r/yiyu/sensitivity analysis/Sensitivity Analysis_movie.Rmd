@@ -1,0 +1,643 @@
+---
+title: "Sensitivity analysis-movie reviews (binary)"
+author: "Yiyu Wang"
+date: "September 2025"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document:
+    keep_tex: true
+    latex_engine: xelatex
+subparagraph: true
+urlcolor: blue
+linkcolor: black
+header-includes:
+- \usepackage{graphicx}
+- \usepackage{float}
+- \usepackage{booktabs}
+---
+
+```{r setup, eval = T, echo = F, message=F, warning=F, results='hide'}
+library(knitr)
+library(kableExtra)
+options(width=60)
+opts_chunk$set(echo = TRUE, comment="", error=FALSE, 
+               #cache.lazy = FALSE, 
+               fig.align="center", message=FALSE, warning=FALSE, tidy = FALSE)
+```
+
+## LLM-based Analysis for Restaurant, Movie and Music Reviews
+## 1.2 LLM Sensitivity analysis - movie reviews
+
+```{r codeblock}
+### Setup
+library(tidyverse)
+library(httr)
+library(jsonlite)
+library(glue)
+library(dplyr)
+library(purrr)
+library(readr)
+library(stringr)
+library(scales)
+```
+
+```{r, eval=FALSE}
+# logs & results directory
+dir.create("logs", showWarnings = FALSE)
+dir.create("results_movie", showWarnings = FALSE)
+dir.create("llm_results/binary_movie_reviews", recursive = TRUE, showWarnings = FALSE)
+
+# load data
+movie_data <- read.csv("data/movie_review_binary.csv")
+# head(movie_data)
+# dim(movie_data)
+movie_data <- movie_data %>%
+  transmute(id = id,
+            review = as.character(review),
+            sentiment = as.integer(sentiment))
+
+# function: split into batches
+split_batches <- function(data, batch_size) {
+  split(data, ceiling(seq_len(nrow(data)) / batch_size))
+}
+
+# develop a prompt (0-shot example)
+generate_prompt_movie <- function(batch_size) {
+  glue(
+    "You are an AI designed to assess sentiment in movie reviews. 
+    I will provide you with a batch of {batch_size} movie reviews. Your task is to analyze each review and determine whether the reviewer liked the movie (1) or did not like it (0).
+    Specifically: Read each review closely and identify any words, phrases, or sentiments that indicate positive or negative sentiment about the movie.
+    Consider:
+    - Overall enjoyment and satisfaction
+    - Acting quality and performances
+    - Plot and storytelling
+    - Direction and cinematography
+    - Special effects and technical aspects
+    - Entertainment value
+    - Recommendation to others
+    
+    Please return exactly {batch_size} binary scores (0 or 1), one per review, where: 1 = The reviewer liked the movie (positive sentiment); 0 = The reviewer did not like the movie (negative sentiment).
+    Do not explain any reasoning. 
+    You must return exactly {batch_size} scores in a JSON array format.
+    If there are fewer or more than {batch_size} scores, review and correct the response before returning it.
+    Example output: [1, 0, 1, 1, 0, ...] (exactly {batch_size} numbers).
+    Make sure the JSON array is correctly formatted before returning it.
+    Do not include any explanations or additional text."
+  )
+}
+
+build_messages_movie <- function(batch_reviews) {
+  n <- nrow(batch_reviews)
+  sys_msg <- glue(
+    "You are an AI that classifies sentiment in movie reviews.
+     Return ONLY a JSON array of 0/1 with exactly {n} integers.
+     No reasoning, no explanations, no labels, no extra text, no trailing commas.
+     The first character must be '[' and the last must be ']'."
+  )
+  user_msg <- paste0(
+    generate_prompt_movie(n), "\n\n",
+    paste0(seq_along(batch_reviews$review), ". ", batch_reviews$review, collapse = "\n")
+  )
+  list(
+    list(role = "system", content = sys_msg),
+    list(role = "user",   content = user_msg)
+  )
+}
+
+# function: robustly parse the LLM's output into a clean vector of 0/1 predictions.
+parse_scores <- function(raw_output, n_expected) {
+  txt <- trimws(raw_output)
+  if (is.character(txt) && startsWith(txt, "[") && !grepl("\\]$", txt) && nchar(txt) < 20000) {
+    raw_output <- paste0(raw_output, "]")
+  }
+  parsed <- try(jsonlite::fromJSON(raw_output), silent = TRUE)
+  scores <- NULL
+  if (!inherits(parsed, "try-error") && is.numeric(parsed)) {
+    scores <- as.numeric(parsed)
+  }
+  if (is.null(scores)) {
+    m <- regexpr("\\[[^\\]]*\\]", raw_output, perl = TRUE)
+    if (m[1] != -1) {
+      candidate <- substr(raw_output, m[1], m[1] + attr(m, "match.length") - 1)
+      parsed2 <- try(jsonlite::fromJSON(candidate), silent = TRUE)
+      if (!inherits(parsed2, "try-error") && is.numeric(parsed2)) {
+        scores <- as.numeric(parsed2)
+      }
+    }
+  }
+  if (is.null(scores)) {
+    toks <- gregexpr("\\b[01]\\b", raw_output, perl = TRUE)
+    if (toks[[1]][1] != -1) {
+      vals <- as.numeric(regmatches(raw_output, toks)[[1]])
+      if (length(vals) >= n_expected) {
+        scores <- vals[seq_len(n_expected)]
+      }
+    }
+  }
+  if (!is.null(scores) && length(scores) == n_expected && all(scores %in% c(0,1))) {
+    return(scores)
+  }
+  return(rep(NA_real_, n_expected))
+}
+
+# API config
+url <- "https://api.together.xyz/v1/chat/completions"
+api_key <- Sys.getenv("TOGETHER_API_KEY")
+
+# batch runner
+run_batch_movie <- function(batch_reviews, param_row, batch_index, log_file) {
+  messages <- build_messages_movie(batch_reviews)
+  n <- nrow(batch_reviews)
+  scores <- rep(NA_real_, n)
+  
+  body_list <- list(
+    model = "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    messages = messages,
+    temperature = param_row$temperature,
+    top_p = param_row$top_p,
+    top_k = param_row$top_k,
+    repetition_penalty = param_row$repetition_penalty,
+    max_tokens = param_row$max_tokens,
+    stream = FALSE
+  )
+  
+  t0 <- Sys.time()
+  response <- httr::POST(
+    url,
+    httr::add_headers(Authorization = paste("Bearer", api_key), `Content-Type` = "application/json"),
+    body = jsonlite::toJSON(body_list, auto_unbox = TRUE),
+    encode = "json"
+  )
+  t1 <- Sys.time()
+  latency_sec <- as.numeric(difftime(t1, t0, units = "secs"))
+  status <- httr::status_code(response)
+  ok <- status == 200
+  
+  result <- try(httr::content(response, as = "parsed", type = "application/json"), silent = TRUE)
+  assistant_reply <- NA_character_
+  if (!inherits(result, "try-error") &&
+      !is.null(result$choices) &&
+      length(result$choices) > 0 &&
+      !is.null(result$choices[[1]]$message$content)) {
+    assistant_reply <- stringr::str_trim(result$choices[[1]]$message$content)
+  }
+  
+  log_entry <- paste0(
+    "\n--- BATCH ", batch_index, " ---\n",
+    "HTTP STATUS: ", status, "\n",
+    "PARAMS: ", paste(capture.output(print(param_row)), collapse = " "), "\n",
+    "LATENCY: ", round(latency_sec, 3), " sec\n",
+    "RESPONSE:\n", ifelse(is.na(assistant_reply), "<no assistant content>", assistant_reply), "\n"
+  )
+  write(log_entry, file = log_file, append = TRUE)
+  
+  if (ok && !is.na(assistant_reply)) {
+    parsed_scores <- parse_scores(assistant_reply, n)
+    
+    if (all(is.na(parsed_scores))) {
+      # one retry with stricter reminder
+      messages_retry <- messages
+      messages_retry[[1]]$content <- paste0(messages_retry[[1]]$content,
+                                            "\nIMPORTANT: Output ONLY the JSON array. No other text.")
+      body_list$messages <- messages_retry
+      
+      t0r <- Sys.time()
+      response2 <- httr::POST(
+        url,
+        httr::add_headers(Authorization = paste("Bearer", api_key), `Content-Type` = "application/json"),
+        body = jsonlite::toJSON(body_list, auto_unbox = TRUE),
+        encode = "json"
+      )
+      t1r <- Sys.time()
+      latency_sec <- latency_sec + as.numeric(difftime(t1r, t0r, units = "secs"))
+      
+      result2 <- try(httr::content(response2, as = "parsed", type = "application/json"), silent = TRUE)
+      assistant_reply2 <- NA_character_
+      if (!inherits(result2, "try-error") &&
+          !is.null(result2$choices) &&
+          length(result2$choices) > 0 &&
+          !is.null(result2$choices[[1]]$message$content)) {
+        assistant_reply2 <- stringr::str_trim(result2$choices[[1]]$message$content)
+      }
+      if (!is.na(assistant_reply2)) {
+        parsed_scores <- parse_scores(assistant_reply2, n)
+        write(paste0("Retry used for batch ", batch_index, "\n"), file = log_file, append = TRUE)
+      }
+    }
+    scores <- parsed_scores
+  } else {
+    err_text <- try(httr::content(response, as = "text", encoding = "UTF-8"), silent = TRUE)
+    write(paste0("ERROR in batch ", batch_index, ": HTTP ", status, " | ", as.character(err_text), "\n"),
+          file = log_file, append = TRUE)
+  }
+  
+  tibble(
+    dataset = "movie",
+    id = batch_reviews$id,
+    Review = batch_reviews$review,
+    GroundTruth = batch_reviews$sentiment,
+    Prediction = scores,
+    batch_index = batch_index,
+    latency_sec = latency_sec,
+    temperature = param_row$temperature,
+    top_p = param_row$top_p,
+    top_k = param_row$top_k,
+    repetition_penalty = param_row$repetition_penalty,
+    max_tokens = param_row$max_tokens,
+    batch_size = n
+  )
+}
+
+# helper: safe division
+safe_div <- function(a, b) {
+  ifelse(b == 0, NA_real_, a / b)
+}
+
+# metrics
+compute_metrics_from_vecs <- function(y_true, y_pred) {
+  y_true <- as.numeric(y_true)
+  y_pred <- as.numeric(y_pred)
+  
+  tp <- as.numeric(sum(y_pred == 1 & y_true == 1, na.rm = TRUE))
+  tn <- as.numeric(sum(y_pred == 0 & y_true == 0, na.rm = TRUE))
+  fp <- as.numeric(sum(y_pred == 1 & y_true == 0, na.rm = TRUE))
+  fn <- as.numeric(sum(y_pred == 0 & y_true == 1, na.rm = TRUE))
+  
+  acc <- safe_div(tp + tn, tp + tn + fp + fn)
+  prec_pos <- safe_div(tp, tp + fp)
+  rec_pos  <- safe_div(tp, tp + fn)
+  f1_pos   <- ifelse(is.na(prec_pos) | is.na(rec_pos) | (prec_pos + rec_pos) == 0,
+                     NA_real_, 2 * prec_pos * rec_pos / (prec_pos + rec_pos))
+  
+  # negative class metrics
+  prec_neg <- safe_div(tn, tn + fn)
+  rec_neg  <- safe_div(tn, tn + fp)
+  f1_neg   <- ifelse(is.na(prec_neg) | is.na(rec_neg) | (prec_neg + rec_neg) == 0,
+                     NA_real_, 2 * prec_neg * rec_neg / (prec_neg + rec_neg))
+  
+  macro_f1 <- mean(c(f1_pos, f1_neg), na.rm = TRUE)
+  specificity <- rec_neg
+  bal_acc <- mean(c(rec_pos, specificity), na.rm = TRUE)
+  
+  denom <- sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+  mcc <- ifelse(denom == 0, NA_real_, ((tp * tn) - (fp * fn)) / denom)
+  
+  missing_rate <- mean(is.na(y_pred))
+  tibble(
+    accuracy = acc,
+    precision = prec_pos,
+    recall = rec_pos,
+    f1_pos = f1_pos,
+    f1_neg = f1_neg,
+    macro_f1 = macro_f1,
+    specificity = specificity,
+    balanced_accuracy = bal_acc,
+    mcc = mcc,
+    missing_rate = missing_rate
+  )
+}
+
+# experiment runner (each combo once)
+run_exp_chunk_movie <- function(dataset, param_chunk, chunk_id = 1) {
+  batch_counter <- 1
+  
+  for (i in 1:nrow(param_chunk)) {
+    param_row <- param_chunk[i, ]
+    param_id <- paste0("chunk", chunk_id, "_param", i)
+    output_file <- glue("results_movie/{param_id}.csv")
+    
+    if (file.exists(output_file)) {
+      cat(glue("Skipping {param_id} (exists)\n"))
+      next
+    }
+    
+    LOG_FILE <- file.path("logs", glue("movie_sensitivity_{param_id}_{format(Sys.time(), '%Y-%m-%d-%H%M%S')}.log"))
+    
+    batches <- split_batches(dataset, param_row$batch_size)
+    cat(glue("\n[Chunk {chunk_id}] Param {i}/{nrow(param_chunk)}\n"))
+    combo_results <- vector("list", length(batches))
+    
+    for (b in seq_along(batches)) {
+      res_b <- run_batch_movie(batches[[b]], param_row, batch_counter, log_file = LOG_FILE)
+      combo_results[[b]] <- res_b
+      batch_counter <- batch_counter + 1
+    }
+    
+    result_df <- bind_rows(combo_results)
+    write_csv(result_df, output_file)
+  }
+}
+
+# define parameter grid
+param_grid <- expand.grid(
+  temperature = c(0.1, 0.2, 0.5),
+  top_p = c(0.8, 0.9, 1.0),
+  top_k = c(20, 50, 100),
+  max_tokens = c(50, 100, 200),
+  batch_size = c(5, 10, 20),    # aligned with restaurant experiments
+  repetition_penalty = 1.0,     # fixed for fair comparison
+  stringsAsFactors = FALSE
+)
+# split grid into manageable chunks (e.g., 20 combos per chunk)
+param_chunks <- split(param_grid, ceiling(seq_len(nrow(param_grid)) / 20))
+
+# Run all chunks
+for (i in seq_along(param_chunks)) {
+  cat(glue("=== Running parameter chunk {i}/{length(param_chunks)} ===\n"))
+  run_exp_chunk_movie(movie_data, param_chunks[[i]], chunk_id = i)
+}
+
+# Merge all partial CSVs
+all_csvs <- list.files("results_movie", pattern = "\\.csv$", full.names = TRUE)
+stopifnot(length(all_csvs) > 0)
+all_results <- purrr::map_dfr(all_csvs, readr::read_csv, show_col_types = FALSE)
+
+# Ensure dataset tag
+if (!"dataset" %in% names(all_results)) all_results$dataset <- "movie"
+
+write_csv(all_results, "llm_results/binary_movie_reviews/movie_tuning_all_results.csv")
+# # check NA prediction
+# sum(is.na(all_results))
+# colSums(is.na(all_results))
+# sum(is.na(all_results$Prediction))
+
+# Per-parameter metrics (single run per combo)
+per_combo_metrics <- all_results %>%
+  group_by(dataset, temperature, top_p, top_k, repetition_penalty, max_tokens, batch_size) %>%
+  summarise(
+    metrics = list(compute_metrics_from_vecs(GroundTruth, Prediction)),
+    avg_latency = mean(latency_sec, na.rm = TRUE),
+    total = n(),
+    .groups = "drop"
+  ) %>%
+  tidyr::unnest_wider(metrics) %>%
+  arrange(desc(macro_f1), desc(accuracy), desc(mcc))
+
+write_csv(per_combo_metrics, "llm_results/binary_movie_reviews/movie_tuning_summary_by_params.csv")
+```
+
+# Visualization
+### 1) Accuracy across batch size and temperature
+
+```{r p1}
+# load data
+metrics_df <- read_csv("llm_results/binary_movie_reviews/movie_tuning_summary_by_params.csv")
+# Convert some parameters to factors for plotting
+metrics_df <- metrics_df %>%
+  mutate(temperature = factor(temperature),
+         top_p = factor(top_p),
+         top_k = factor(top_k),
+         max_tokens = factor(max_tokens),
+         batch_size = factor(batch_size))
+
+my_colors <- c("0.1" = "#4C72B0",   
+               "0.2" = "#DD8452",   
+               "0.5" = "#55A868") 
+
+# p1 - Accuracy vs Batch Size
+p1 <- metrics_df %>%
+  ggplot(aes(x = batch_size, y = accuracy, fill = temperature)) +
+  geom_col(position = position_dodge(width = 0.8), na.rm = FALSE) +
+  labs(title = "Accuracy across batch size & temperature (Movie dataset)",
+       x = "Batch size",
+       y = "Accuracy",
+       fill = "Temperature") +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_manual(values = my_colors, na.value = "grey70") +
+  theme_bw()
+p1
+```
+
+### 2) Macro F1 vs batch size & top_p
+
+```{r p2}
+# p2 - Macro F1 vs Batch Size & top_p
+top_p_labels <- c("0.8" = "top_p = 0.8",
+                  "0.9" = "top_p = 0.9",
+                  "1"   = "top_p = 1.0")
+
+p2 <- metrics_df %>%
+  ggplot(aes(x = batch_size, y = macro_f1, color = temperature, group = temperature)) +
+  geom_smooth(method = "loess", se = TRUE, alpha = 0.2, linewidth = 1, na.rm = FALSE) +
+  geom_point(size = 2, na.rm = FALSE) +
+  facet_wrap(~ top_p, nrow = 1, labeller = labeller(top_p = top_p_labels)) +
+  labs(title = "Macro F1 Score by Batch Size & top_p (Movie dataset)",
+       x = "Batch size",
+       y = "Macro F1 score",
+       color = "Temperature", 
+       fill = "Temperature") +
+  scale_color_manual(values = my_colors, na.value = "grey70") +
+  scale_fill_manual(values = my_colors, na.value = "grey70") +
+  theme_bw(base_size = 12)
+p2
+```
+
+### 3) Accuracy Heatmap across parameter combinations (faceted by batch size)
+
+```{r p3a-plot, fig.width=12, fig.height=8}
+# p3 - Heatmap of Accuracy
+temp_labels <- c("0.1" = "temp. = 0.1",
+                 "0.2" = "temp. = 0.2",
+                 "0.5" = "temp. = 0.5")
+
+# A: batch size as facet
+p3_a <- metrics_df %>%
+  ggplot(aes(x = max_tokens, y = top_k, fill = accuracy)) +
+  geom_tile(color = "white", na.rm = FALSE) +
+  labs(title = "Heatmap of Accuracy (top_k * max_tokens) by batch_size (Movie)",
+       x = "max_tokens", y = "top_k", fill = "Accuracy") +
+  scale_fill_gradient(low = "#f0f9e8", high = "#0868ac", na.value = "grey70",
+                      labels = number_format(accuracy = 0.001)) +
+  facet_grid(batch_size ~ top_p + temperature,
+             labeller = labeller(temperature = temp_labels,
+                                 top_p = top_p_labels,
+                                 batch_size = label_both)) +
+  guides(fill = guide_colorbar(title.position = "top", barwidth = 2)) +
+  theme_minimal(base_size = 10) +
+  theme(strip.background = element_rect(fill = "#f3f3f3", color = NA),
+        strip.text = element_text(face = "bold", size = 8),
+        axis.title.x = element_text(size = 14, face = "bold"),
+        axis.title.y = element_text(size = 14, face = "bold"))
+p3_a
+```
+
+### 4) Accuracy Heatmap across parameter combinations (faceted by max_tokens)
+
+```{r p3b-plot, fig.width=12, fig.height=8}
+# p3-B: max_tokens as facet; x = batch_size
+p3_b <- metrics_df %>%
+  ggplot(aes(x = batch_size, y = top_k, fill = accuracy)) +
+  geom_tile(color = "white", na.rm = FALSE) +
+  labs(title = "Heatmap of Accuracy (batch_size * top_k), faceted by max_tokens (Movie)",
+       x = "Batch size", y = "top_k", fill = "Accuracy") +
+  scale_fill_gradient(low = "#f0f9e8", high = "#0868ac", na.value = "grey70",
+                      labels = number_format(accuracy = 0.001)) +
+  facet_grid(top_p ~ temperature + max_tokens,
+             labeller = labeller(temperature = temp_labels,
+                                 top_p = top_p_labels,
+                                 max_tokens = label_both)) +
+  guides(fill = guide_colorbar(title.position = "top", barwidth = 2)) +
+  theme_minimal(base_size = 10) +
+  theme(strip.background = element_rect(fill = "#f3f3f3", color = NA),
+        strip.text = element_text(face = "bold", size = 8),
+        axis.title.x = element_text(size = 14, face = "bold"),
+        axis.title.y = element_text(size = 14, face = "bold"))
+p3_b
+```
+
+### 5) Precision vs Recall
+
+```{r p4}
+# p4 - Precision vs Recall
+# Threshold for outliers (customizable)
+prec_thr <- 0.85
+recall_thr <- 0.88
+
+# Identify outliers: any point with low precision OR low recall
+outliers <- metrics_df %>%
+  filter(precision < prec_thr | recall < recall_thr) %>%
+  mutate(combo_id = paste0("temp=", temperature,
+                           "_top_p=", top_p,
+                           "_top_k=", top_k,
+                           "_max_tokens=", max_tokens,
+                           "_batch=", batch_size))
+
+# PR scatter plot
+p_pr <- metrics_df %>%
+  ggplot(aes(x = precision, y = recall,
+             color = temperature, shape = batch_size)) +
+  geom_point(size = 3, alpha = 0.8) +
+  # Add threshold reference lines
+  geom_vline(xintercept = prec_thr, linetype = "dashed", color = "red", size = 0.7) +
+  geom_hline(yintercept = recall_thr, linetype = "dashed", color = "red", size = 0.7) +
+  # Highlight outliers with labels
+  geom_point(data = outliers, aes(x = precision, y = recall), 
+             color = "black", fill = "yellow", size = 4, shape = 21, stroke = 1.2) +
+  ggrepel::geom_text_repel(data = outliers, aes(x = precision, y = recall, label = combo_id),
+                           size = 3, color = "black", max.overlaps = 10) +
+  labs(title = "Precision vs Recall across parameter settings (Movie dataset)",
+       x = "Precision", y = "Recall",
+       color = "Temperature", shape = "Batch Size") +
+  theme_bw(base_size = 12)
+
+print(p_pr)
+```
+
+### 6) Balanced Accuracy vs MCC
+
+```{r p5}
+# p5 - Balanced Accuracy vs MCC 
+p5_ba_mcc <- metrics_df %>%
+  ggplot(aes(x = balanced_accuracy, y = mcc,
+             color = top_p)) +
+  geom_point(size = 3, alpha = 0.8, na.rm = FALSE) +
+  labs(title = "Balanced Accuracy vs MCC (Movie dataset)",
+       x = "Balanced Accuracy", y = "MCC",
+       color = "top_p") +
+  theme_bw(base_size = 12)
+
+print(p5_ba_mcc)
+```
+
+### 7) Barchart: Average missing rate vs batch size
+
+```{r p6}
+# p6: bar chart - average missing Rate vs Batch Size
+p6_miss <- metrics_df %>%
+  group_by(batch_size) %>%
+  summarise(avg_missing = mean(missing_rate, na.rm = TRUE)) %>%
+  ggplot(aes(x = batch_size, y = avg_missing, fill = batch_size)) +
+  geom_col(na.rm = FALSE) +
+  labs(title = "Average Missing Rate by Batch Size (Movie dataset)",
+       x = "Batch size", y = "Avg. Missing Rate") +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_brewer(palette = "Set2", na.value = "grey70") +
+  theme_bw(base_size = 12)
+print(p6_miss)
+```
+
+### 8) Failure rate heatmap
+
+```{r p7, fig.width=12, fig.height=8}
+# Failure Rate (Missing Rate) Visualization
+# Heatmap: missing rate across all parameter combinations, facet by batch_size
+p_fail_full_heat <- metrics_df %>%
+  ggplot(aes(x = max_tokens, y = top_k, fill = missing_rate)) +
+  geom_tile(color = "white") +
+  labs(title = "Failure Rate Heatmap across parameter combinations (Movie)",
+       x = "max_tokens", y = "top_k", fill = "Missing Rate") +
+  scale_fill_gradient(low = "#f0f9e8", high = "#d73027",
+                      na.value = "grey70",
+                      labels = percent_format(accuracy = 1)) +
+  facet_grid(batch_size ~ temperature + top_p,
+             labeller = labeller(
+               temperature = label_both,
+               top_p = label_both,
+               batch_size = label_both)) +
+  theme_minimal(base_size = 10) +
+  theme(strip.background = element_rect(fill = "#f3f3f3", color = NA),
+        strip.text = element_text(face = "bold", size = 8),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+print(p_fail_full_heat)
+```
+
+### 9) Tables: Top 5 & Bottom 5 parameter combos
+
+```{r table, echo=FALSE}
+# Tables
+# Select key columns for reporting
+report_cols <- c("temperature", "top_p", "top_k", "max_tokens", "batch_size",
+                 "accuracy", "macro_f1", "mcc", "precision", "recall", "missing_rate")
+
+# Rank by macro_f1 (primary), then accuracy, then mcc
+ranked_df <- metrics_df %>%
+  arrange(desc(macro_f1), desc(accuracy), desc(mcc))
+
+# Top-5 best parameter combos
+top5 <- ranked_df %>%
+  slice_head(n = 5) %>%
+  select(all_of(report_cols))
+
+# Bottom-5 worst parameter combos
+bottom5 <- ranked_df %>%
+  slice_tail(n = 5) %>%
+  select(all_of(report_cols))
+
+# Print as tables
+cat("===== Top-5 Best Parameter Combos (Movie dataset) =====\n")
+print(top5)
+
+cat("\n===== Bottom-5 Worst Parameter Combos (Movie dataset) =====\n")
+print(bottom5)
+```
+
+### 10) Plot: Top 5 vs Bottom 5 parameter settings
+
+```{r p8}
+# plot: top5 vs bottom5 parameter combos
+# Rank by macro_f1 > accuracy > mcc
+ranked_df <- metrics_df %>%
+  arrange(desc(macro_f1), desc(accuracy), desc(mcc)) %>%
+  mutate(combo_id = paste0("Combo_", row_number()))  # shorten labels
+# Select Top-5 and Bottom-5
+top5 <- ranked_df %>% slice_head(n = 5) %>% mutate(group = "Top-5")
+bottom5 <- ranked_df %>% slice_tail(n = 5) %>% mutate(group = "Bottom-5")
+
+combo_df <- bind_rows(top5, bottom5) %>%
+  select(combo_id, group, macro_f1, missing_rate) %>%
+  pivot_longer(cols = c(macro_f1, missing_rate),
+               names_to = "metric", values_to = "value")
+# Plot dotplot
+p_dot <- combo_df %>%
+  ggplot(aes(x = value, y = reorder(combo_id, value), color = group)) +
+  geom_point(size = 3) +
+  facet_wrap(~ metric, scales = "free_x") +
+  labs(title = "Top-5 vs Bottom-5 Parameter Combos (Movie)",
+       x = "Value", y = "Parameter Combo", color = "Group") +
+  theme_bw(base_size = 12)
+
+print(p_dot)
+```
+
