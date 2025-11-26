@@ -1,3 +1,52 @@
+from sklearn.utils import check_random_state
+from sklearn.cluster import KMeans, MiniBatchKMeans
+from sklearn.metrics import silhouette_score
+import numpy as np
+import random
+from kneed import KneeLocator
+import matplotlib.pyplot as plt
+
+
+def find_optimal_k_elbow(all_embeddings):
+    """
+    Uses the elbow method (inertia) and automatically detects
+    the elbow using the KneeLocator algorithm.
+    """
+    n_samples = len(all_embeddings)
+    max_k = min(20, n_samples - 1)
+    k_values = range(2, max_k + 1)
+
+    inertias = []
+
+    #print("Computing inertias...")
+    for k in k_values:
+        #print(f"k = {k}")
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto')
+        kmeans.fit(all_embeddings)
+        inertias.append(kmeans.inertia_)
+
+    # Use Kneedle to find elbow point
+    kn = KneeLocator(
+        k_values,
+        inertias,
+        curve='convex',
+        direction='decreasing'
+    )
+
+    optimal_k = kn.knee
+
+    print(f"\nDetected elbow at k = {optimal_k}")
+    return optimal_k, k_values, inertias
+
+def plot_elbow(k_values, inertias, optimal_k):
+    plt.figure(figsize=(5,3))
+    plt.plot(k_values, inertias, marker='o')
+    plt.axvline(optimal_k, linestyle='--')
+    plt.title("Elbow Method")
+    plt.xlabel("Number of clusters (k)")
+    plt.ylabel("Inertia")
+    plt.show()
+
 def generate_sample_points(min_points_per_edge, max_points_per_edge, boundary_gdf, edges_gdf):
     # --------------------------------------------------------------------
     # Generate a sample of points along the street network (probabilistic)
@@ -55,7 +104,7 @@ def find_optimal_k(all_embeddings):
 
         inertias.append(kmeans.inertia_)
         sil_scores.append(silhouette_score(all_embeddings, labels))
-        print(silhouette_score(all_embeddings, labels))
+        #print(silhouette_score(all_embeddings, labels))
     best_k = k_values[np.argmax(sil_scores)]
     return best_k
 
@@ -69,7 +118,7 @@ def find_optimal_k_fast(all_embeddings, max_k=20, sample_size=5000):
     rng = check_random_state(42)
     
     for k in k_values:
-        print(f"Testing k={k}")
+        #print(f"Testing k={k}")
         
         # MiniBatchKMeans is much faster for large datasets
         kmeans = MiniBatchKMeans(n_clusters=k, random_state=42, batch_size=1024)
@@ -84,7 +133,7 @@ def find_optimal_k_fast(all_embeddings, max_k=20, sample_size=5000):
             sil = silhouette_score(all_embeddings, labels)
         
         sil_scores.append(sil)
-        print(f"Silhouette score: {sil:.4f}")
+        #print(f"Silhouette score: {sil:.4f}")
     
     best_k = k_values[np.argmax(sil_scores)]
     return best_k, inertias, sil_scores
@@ -119,7 +168,7 @@ def plot_example_images_per_cluster(df, k, column, n_show=5):
         for ax in axes[len(sample_imgs):]:
             ax.axis("off")
 
-        plt.suptitle(f"Global Cluster {c}", fontsize=14, fontweight='bold')
+        plt.suptitle(f"Global Cluster {c}, {len(cluster_imgs)} images", fontsize=14, fontweight='bold')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         plt.show()
         
