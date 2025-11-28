@@ -58,7 +58,7 @@ The analysis is implemented across a set of Jupyter notebooks, described below.
 
 ### 1. 1-SampleStreetNetwork.ipynb  
 
-This notebook:
+This notebook:  
 - Samples points along the road network at approximately X metres spacing
 - Downloads images from Google Street View via the Maps API
 - Captures four images per location, facing the four cardinal directions
@@ -85,92 +85,66 @@ This notebook performs all embedding calculations.
      - 512-D embedding  
      - Category probability vector  
 
-3. 3-AssessImageClassifications.ipynb
+### 3. 3-AssessImageClassifications.ipynb
 
 This notebook provides quality assessment of CLIP’s text-prompt classifications.
 
 It includes:
 
-Manual/subjective inspection of matches
+- Manual/subjective inspection of matches  
+- Assigning each image to the category with the highest probability  
+- Visualisations such as:  
+    - Highest-scoring images for each category
+    - Images with the least decisive probability distributions
+    - Category-specific image grids
 
-Assigning each image to the category with the highest probability
-
-Visualisations such as:
-
-Highest-scoring images for each category
-
-Images with the least decisive probability distributions
-
-Category-specific image grids
-
-4. 4-SummariseEmbeddings.ipynb
+### 4. 4-SummariseEmbeddings.ipynb
 
 Aggregates image-level outputs to the LSOA level.
 
 This notebook:
 
-Computes the percentage of images in each category per LSOA
+- Computes the percentage of images in each category per LSOA  
+- Generates mean, median, and max CLIP embeddings per LSOA  
+- Repeats these calculations using only images belonging to each category  
+- Produces a final LSOA-level dataframe containing:  
+    - Embedding summaries  
+    - Category proportions  
+    - Image counts  
+    - Additional metadata for downstream modelling
 
-Generates mean, median, and max CLIP embeddings per LSOA
-
-Repeats these calculations using only images belonging to each category
-
-Produces a final LSOA-level dataframe containing:
-
-Embedding summaries
-
-Category proportions
-
-Image counts
-
-Additional metadata for downstream modelling
-
-5. 5-InvestigateEmbeddings_CorrelationWithIMD.ipynb
+### 5. 5-InvestigateEmbeddings_CorrelationWithIMD.ipynb
 
 Explores links between visual features and socio-economic deprivation (IMD).
 
 Includes:
+- Correlation between each embedding dimension and IMD
+- Comparison to expected correlations from random noise
+- PCA decomposition of embeddings
+- Visualisations of PC–IMD relationships
 
-Correlation between each embedding dimension and IMD
-
-Comparison to expected correlations from random noise
-
-PCA decomposition of embeddings
-
-Visualisations of PC–IMD relationships
-
-6. 6-Test-models.ipynb
+### 6. 6-Test-models.ipynb
 
 Tests a range of predictive models linking image-derived features to IMD.
 
 This notebook:
+- Trains a random forest using an 80/20 train–test split
+- Compares performance using:
+    - Mean vs. median vs. max embeddings
+    - Category percentages
+    - Category-specific embeddings
 
-Trains a random forest using an 80/20 train–test split
+- Implements full model fitting with:
+    - Cross-validation
+    - Hyperparameter tuning
+    - Model comparison across feature sets
 
-Compares performance using:
+### 7. 7-Test-models-FeatureImportance.ipynb
 
-Mean vs. median vs. max embeddings
+Assesses which embedding dimensions or features contribute most to IMD predictions.  
 
-Category percentages
+Includes:  
 
-Category-specific embeddings
-
-Implements full model fitting with:
-
-Cross-validation
-
-Hyperparameter tuning
-
-Model comparison across feature sets
-
-7. 7-Test-models-FeatureImportance.ipynb
-
-Assesses which embedding dimensions or features contribute most to IMD predictions.
-
-Includes:
-
-Random forest permutation importance
-
-Gini importance
-
-Visualisations of feature rankings
+- Random forest permutation importance  
+- Gini importance  
+- Visualisations of feature rankings  
