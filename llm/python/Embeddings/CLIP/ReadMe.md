@@ -4,7 +4,7 @@
     - For each point, sample 4 images, facing in the 4 cardinal directions
 - Save a pickle file containing...
 
-2-CalculateEmbeddings.ipynb  
+* 2-CalculateEmbeddings.ipynb *
 - Create text embeddings for the categories we want to assign images to
 - Create image embedding for each image
 - Calculate similarity scores between each image and each embedding
