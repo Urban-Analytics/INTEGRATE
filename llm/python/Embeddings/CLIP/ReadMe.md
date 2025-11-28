@@ -1,4 +1,3 @@
-
 1-SampleStreetNetwork.ipynb
 - Sample (randomly?) locations on the road network, roughly Xm (?) apart
 - Download images from street view using Google Maps API
@@ -11,26 +10,31 @@
 - Calculate similarity scores between each image and each embedding
 
 3-AssessImageClassifications.ipynb  
+- (Subjective) assessment of how good the matching of images to textual descriptions is  
+- This includes assigning images to their highest-soring category  
+- Plots of:  
+    - The top-scoring images for particular categories  
+    - The images with the least conclusive scoring  
+    - The images classified within each of the category  
 
 4-SummariseEmbeddings.ipynb  
+- Calculate the % of images in each LSOA in each of the categories  
+- Find mean/median/max embedding in each LSOA  
+- Find mean/median/max embedding in each LSOA, using just images in each of the categories  
+- Create a dataframe, one row per LSOA, containing all of this information  
 
 5-InvestigateEmbeddings_CorrelationWithIMD.ipynb  
+- Look at the correlation of each the embedding dimensions on its own with the IMD.  
+- Compare this to the distribution of correlations for an embedding made up on random numbers.    
+- Perform a PCA on the embedding and plot the relationship between the two and the IMD.  
 
 6-Test-models.ipynb  
+- Test performance of a random forest model with a 80-20% train-test split.
+    - Compare performance with the median vs. max vs. mean embedding.    
+    - Compare performance with just the median embedding, just the percentages in each category or both.
+    - Compare performance using just images within each of the categories.  
+- Fit the model properly:  
+    - Fit several different models with cross validation and hyper-parameter tuning, in order to work out the best model and parameters.  
 
 7-Test-models-FeatureImportance.ipynb  
-
-
-# Estimating Gentrification using Street View Images and Embeddings
-
-This script (initially produced by ChatGPT) does the following (_this was my query_):
- - Read a spatial boundary file (that I will hard code)
- - Obtain the road network (from OSM?) for that area
- - Generate sample points on the road network roughly X meters apart
- - At each sample point, download the most recent street images for that location (either a single 360 degree view of a few smaller images). Use whichever API service is the most appropriate for obtaining the images. Importantly please record the date that the image was taken.
- - For each image, calculate an embedding using an appropriate foundation model (one that has been pre-trained to distinguish street environments specifically). Please use Hugging Face libraries.
- - If necessary, calculate the mean embedding for each point (is this the best way to calculate a single embedding for a point represented by multiple images?)
- - Now, for each sampled point there will be a dataframe with information about the point and its embedding. Read another polygon spatial data file, that I will provide, which contains area-level estimates of gentrification.
- - Use point-in-polygon to get the gentrification for each point.
- - Use cross-validation to train a couple of ML models (probaly random forest, linear regression and a neural network) to estimate gentrification from the embedding vectors
- - Choose the best model and parameter configuration and test this model on some held-out data.
+- Fit a random forest model and look at both permutation importance and Gini importance.  
