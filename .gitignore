@@ -18,6 +18,11 @@ _site
 # jupyter stuff
 **/.virtual_documents/
 **/.ipynb_checkpoints/
+jupyter_runtime/
+**/jupyter_runtime/
+*.json
+# or more specific:
+kernel-*.json
 
 # Python stuff
 **/__pycache__/
