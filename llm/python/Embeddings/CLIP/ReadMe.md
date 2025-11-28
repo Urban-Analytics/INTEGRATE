@@ -3,16 +3,23 @@
 - Sample (randomly?) locations on the road network, roughly Xm (?) apart
 - Download images from street view using Google Maps API
     - For each point, sample 4 images, facing in the 4 cardinal directions
-- Save a pickle file containing 
-2-CalculateEmbeddings.ipynb
+- Save a pickle file containing...
+
+2-CalculateEmbeddings.ipynb  
 - Create text embeddings for the categories we want to assign images to
 - Create image embedding for each image
 - Calculate similarity scores between each image and each embedding
-3-AssessImageClassifications.ipynb
-4-SummariseEmbeddings.ipynb
-5-InvestigateEmbeddings_CorrelationWithIMD.ipynb
-6-Test-models.ipynb
-7-Test-models-FeatureImportance.ipynb
+
+3-AssessImageClassifications.ipynb  
+
+4-SummariseEmbeddings.ipynb  
+
+5-InvestigateEmbeddings_CorrelationWithIMD.ipynb  
+
+6-Test-models.ipynb  
+
+7-Test-models-FeatureImportance.ipynb  
+
 
 # Estimating Gentrification using Street View Images and Embeddings
 
