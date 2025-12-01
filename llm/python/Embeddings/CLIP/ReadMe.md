@@ -41,7 +41,7 @@
 
 # Street-Level Image Embeddings & Deprivation Analysis
 
-A pipeline for sampling street-view imagery, extracting CLIP embeddings, classifying scenes, and linking visual patterns to socio-economic indicators.
+Code for sampling street-view imagery, extracting CLIP embeddings, classifying scenes, and linking visual patterns to socio-economic indicators.
 
 ## Overview
 
