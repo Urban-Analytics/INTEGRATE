@@ -132,7 +132,7 @@ def find_optimal_k(all_embeddings):
     best_k = k_values[np.argmax(sil_scores)]
     return best_k
 
-def find_optimal_k_fast(all_embeddings, max_k=20, sample_size=5000):
+def find_optimal_k_silhoutte_fast(all_embeddings, max_k=20, sample_size=5000):
     n_samples = all_embeddings.shape[0]
     max_k = min(max_k, n_samples - 1)
     k_values = range(2, max_k + 1)
@@ -142,7 +142,7 @@ def find_optimal_k_fast(all_embeddings, max_k=20, sample_size=5000):
     rng = check_random_state(42)
     
     for k in k_values:
-        #print(f"Testing k={k}")
+        #print(f"Testing k={k}")s
         
         # MiniBatchKMeans is much faster for large datasets
         kmeans = MiniBatchKMeans(n_clusters=k, random_state=42, batch_size=1024)
