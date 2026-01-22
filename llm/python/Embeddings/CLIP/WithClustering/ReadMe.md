@@ -67,6 +67,8 @@ This notebook performs all embedding calculations using CLIP
 
 NB: Also possible to calcualte similarity scores with CLIP to text embeddings. We trialled this in previous iterations of the work. Code for this is: https://github.com/Urban-Analytics/INTEGRATE/tree/main/llm/python/Embeddings/CLIP/WithSemanticLabels
 
+**Output**: Dataset with one embedding vector per image.
+
 ----------------
 
 ### 3-ProcessEmbeddings+FindMedianEmbeddingPerLSOA.ipynb
@@ -83,6 +85,8 @@ This notebook:
     - Category proportions
     - The mean/max/median embedding for each of the categories
 
+**Output**: Dataframe containing the overall LSOA mean / median / max embedding; Percentage of images in each cluster; Mean / median / max embedding per cluster
+
 ----------------
 
 ### 4-RunModelsWithMedianEmbedding.ipynb
@@ -95,6 +99,8 @@ This script:
 - Splits the data into 80% training, 20% testing
 - Performs model selection and hyper-parameter tuning using the 80% training data:
 - Tests out-of-sample performance of ‘best’ model
+
+**Output**: A saved version of the best model; statistics on out-of-sample model performance 
 
 ----------------
 
