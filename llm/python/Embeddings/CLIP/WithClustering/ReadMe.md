@@ -9,13 +9,13 @@ This repository provides an end-to-end workflow for:
 - Sampling points across a road network  
 - Downloading Google Street View imagery  
 - Generating CLIP image embeddings  
-- Classifying images into semantic categories using text prompts  
-- Aggregating embeddings and classifications at the neighbourhood (LSOA) level  
+- Aggregating embeddings at the neighbourhood (LSOA) level  (median pooling)
+- Fitting a predictive model for deprivation (IMD) using the median pooled embedding in each LSOA
 - Exploring relationships between visual indicators and the Index of Multiple Deprivation (IMD)  
 
 The analysis is implemented across a set of Jupyter notebooks, described below.
 
-### 1. 1-SampleStreetNetwork.ipynb  
+### 1-SampleStreetNetwork.ipynb  
 
 This notebook:  
 - Samples points along the road network at approximately 200 metres spacing
@@ -26,40 +26,20 @@ This notebook:
     - Image metadata
     - Filepaths to all downloaded images
 
-### 2. 2-CalculateEmbeddings.ipynb  
+### 2-CalculateEmbeddings.ipynb  
 
-This notebook performs all embedding calculations.
-
-#### Text Embeddings  
-
-- Creates CLIP text embeddings for the user-defined semantic categories
-- For each semantic category, several prompts are defined
-- One embedding is then derived per category, by averaging over the set of prompts
+This notebook performs all embedding calculations using CLIP
 
 
 #### Image Embeddings  
 
 - Loads each Street View image and extracts its 512 character CLIP image embedding  
-- Computes similarity scores between the image embedding and all text embeddings  
-- Converts similarity scores into softmax-normalised category "probabilities" (NB: these are not true probabilities)
 - Stores per-image:  
      - 512 character embedding  
-     - Category "probability" vector  
 
-### 3. 3-AssessImageClassifications.ipynb
+NB: Also possible to calcualte similarity scores with CLIP to text embeddings. We trialled this in previous iterations of the work. Code for this is: https://github.com/Urban-Analytics/INTEGRATE/tree/main/llm/python/Embeddings/CLIP/WithSemanticLabels
 
-This notebook provides quality assessment of CLIP’s text-prompt classifications.
-
-It includes:
-
-- Manual/subjective inspection of matches  
-- Assigning each image to the category with the highest score  
-- Visualisations such as:  
-    - Highest-scoring images for each category
-    - Images with the least decisive probability distributions
-    - Category-specific image grids
-
-### 4. 4-SummariseEmbeddings.ipynb
+### 3-ProcessEmbeddings+FindMedianEmbeddingPerLSOA.ipynb
 
 Aggregates image-level outputs to the LSOA level.
 
@@ -73,38 +53,35 @@ This notebook:
     - Category proportions
     - The mean/max/median embedding for each of the categories
 
-### 5. 5-InvestigateEmbeddings_CorrelationWithIMD.ipynb
+### 4-RunModelsWithMedianEmbedding.ipynb
 
-Explores links between embeddings and IMD.
+Performs model selection, hyper-parameter tuning and out-of-sample model testing
 
-Includes:
-- Correlation between each embedding dimension and IMD
-- Comparison to expected correlations from random noise
-- PCA decomposition of embeddings
-- Visualisations of PC–IMD relationships
+This script:
 
-### 6. 6-Test-models.ipynb
+- Reads in the dataframe containing the per-LSOA summary info (e.g. mean/max/min embedding, mean/max/min embedding per cluster grouping, % of images in each cluster in each LSOA)
+- Splits the data into 80% training, 20% testing
+- Performs model selection and hyper-parameter tuning using the 80% training data:
+- Tests out-of-sample performance of ‘best’ model
 
-Tests a range of predictive models linking image embeddings to IMD.
+### 5-IdentifyOptimalClusterNumber.ipynb
 
-This notebook:
-- Trains a random forest using an 80/20 train–test split
-- Compares performance using:
-    - Mean vs. median vs. max embeddings
-    - Category percentages
-    - Category-specific embeddings
+Does various tests to check for the presence of structure within the embeddings that would allow them to be meaningfully broken down into sub-clusters
 
-- Implements full model fitting with:
-    - Cross-validation
-    - Hyperparameter tuning
-    - Model comparison across feature sets
 
-### 7. 7-Test-models-FeatureImportance.ipynb
+### 6-TestModelOverClusters_ControlledForSampleSize.ipynb
 
-Assesses which embedding dimensions or features contribute most to IMD predictions.  
+This script evaluates how predictive performance varies with sample size and number of clusters, while controlling for unequal image counts across clusters.
 
-Includes:  
 
-- Random forest permutation importance  
-- Gini importance  
-- Visualisations of feature rankings  
+### 7-FindMedianEmbeddings_ForEachOf7Clusters.ipynb
+
+This script:
+- Finds the mean/min/max embedding within each cluster, within each LSOA
+- Saves a pickle file containing a dataframe containing this information
+
+### 8-RunModels_ForEachOf7Clusters.ipynb
+
+This script:
+- Compares model performance:
+    - using data only from one of the clusters, for each of the clusters
