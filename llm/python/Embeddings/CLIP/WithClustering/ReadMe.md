@@ -34,7 +34,7 @@ This repository provides an end-to-end workflow for:
 - **Clustering**: Embeddings are clustered to test whether visually distinct image groupings exist.
 - **Modelling**: Supervised models are trained to predict IMD using aggregated embedding features.
 
-Repository Structure
+## Repository Structure
 
 The workflow is designed to be run sequentially.
 
