@@ -1,6 +1,8 @@
 # Street-Level Image Embeddings & Deprivation Analysis
 
-Code for testing whether deprivation can be predicted using Google street view imagery. 
+This repository contains code for testing whether area-level deprivation can be predicted from Google Street View imagery using image embeddings.
+
+The workflow combines large-scale image sampling, CLIP-based feature extraction, spatial aggregation, and supervised modelling to examine relationships between visual characteristics of neighbourhoods and the UK Index of Multiple Deprivation (IMD).
 
 ## Overview
 
@@ -13,11 +15,33 @@ This repository provides an end-to-end workflow for:
 - Fitting a predictive model for deprivation (IMD) using the median pooled embedding in each LSOA
 - Exploring relationships between visual indicators and the Index of Multiple Deprivation (IMD)  
 
-The analysis is implemented across a set of Jupyter notebooks, described below.
 
+## Data Sources
+### Street View Imagery
+- Google Street View Static API
+- Four images captured per location (one per cardinal direction)
+
+### Deprivation Data
+- Index of Multiple Deprivation (IMD), LSOA-level
+
+
+## Methodological Summary
+
+- **Sampling**: Points are sampled along the road network at approximately 200 m spacing.
+- **Image Collection:** At each sampled point, four Street View images are downloaded facing north, south, east, and west.
+- **Feature Extraction:** Each image is encoded using the CLIP image encoder, producing a 512-dimensional embedding.
+- **Spatial Aggregation:** Image embeddings are aggregated to the LSOA level using median pooling.
+- **Clustering**: Embeddings are clustered to test whether visually distinct image groupings exist.
+- **Modelling**: Supervised models are trained to predict IMD using aggregated embedding features.
+
+Repository Structure
+
+The workflow is designed to be run sequentially.
+
+----------------
 ### 1-SampleStreetNetwork.ipynb  
 
-This notebook:  
+This notebook:
 - Samples points along the road network at approximately 200 metres spacing
 - Downloads images from Google Street View via the Maps API
 - Captures four images per location, facing the four cardinal directions
@@ -25,6 +49,10 @@ This notebook:
     - Point coordinates
     - Image metadata
     - Filepaths to all downloaded images
+
+**Output**: Pickle file containing one row per sampled image location.
+
+----------------
 
 ### 2-CalculateEmbeddings.ipynb  
 
@@ -38,6 +66,8 @@ This notebook performs all embedding calculations using CLIP
      - 512 character embedding  
 
 NB: Also possible to calcualte similarity scores with CLIP to text embeddings. We trialled this in previous iterations of the work. Code for this is: https://github.com/Urban-Analytics/INTEGRATE/tree/main/llm/python/Embeddings/CLIP/WithSemanticLabels
+
+----------------
 
 ### 3-ProcessEmbeddings+FindMedianEmbeddingPerLSOA.ipynb
 
@@ -53,6 +83,8 @@ This notebook:
     - Category proportions
     - The mean/max/median embedding for each of the categories
 
+----------------
+
 ### 4-RunModelsWithMedianEmbedding.ipynb
 
 Performs model selection, hyper-parameter tuning and out-of-sample model testing
@@ -64,15 +96,19 @@ This script:
 - Performs model selection and hyper-parameter tuning using the 80% training data:
 - Tests out-of-sample performance of ‘best’ model
 
+----------------
+
 ### 5-IdentifyOptimalClusterNumber.ipynb
 
 Does various tests to check for the presence of structure within the embeddings that would allow them to be meaningfully broken down into sub-clusters
 
+----------------
 
 ### 6-TestModelOverClusters_ControlledForSampleSize.ipynb
 
 This script evaluates how predictive performance varies with sample size and number of clusters, while controlling for unequal image counts across clusters.
 
+----------------
 
 ### 7-FindMedianEmbeddings_ForEachOf7Clusters.ipynb
 
@@ -80,8 +116,12 @@ This script:
 - Finds the mean/min/max embedding within each cluster, within each LSOA
 - Saves a pickle file containing a dataframe containing this information
 
+----------------
+
 ### 8-RunModels_ForEachOf7Clusters.ipynb
 
 This script:
 - Compares model performance:
     - using data only from one of the clusters, for each of the clusters
+ 
+----------------
