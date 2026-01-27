@@ -119,6 +119,7 @@ clustering_functions.py provides various functions used by the main jupyter note
 This script evaluates how predictive performance varies with sample size and number of clusters, while controlling for unequal image counts across clusters.
 
 **Output**: A pickle file contaninig the results from these experiments. A figure plotting the results of these experiments (this can be created for various different error metrics by changing this parameter in the script). 
+
 ----------------
 
 ### 7-FindMedianEmbeddings_ForEachOf7Clusters.ipynb
@@ -126,6 +127,7 @@ This script evaluates how predictive performance varies with sample size and num
 This script finds the mean/min/max embedding within each cluster, within each LSOA.
 
 **Output**: A pickle file containing a dataframe containing this information
+
 ----------------
 
 ### 8-RunModels_ForEachOf7Clusters.ipynb
@@ -133,4 +135,5 @@ This script finds the mean/min/max embedding within each cluster, within each LS
 This script compares model performance using data only from one of the clusters, for each of the clusters
 
 **Output**: A dataframe containing four different error metrics for a model trained and tested using solely images from each of 7 clusters. Also the same information plotted in a figure.
+
 ----------------
