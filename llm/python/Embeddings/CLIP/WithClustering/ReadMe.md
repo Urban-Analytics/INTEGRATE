@@ -108,26 +108,29 @@ This script:
 
 Does various tests to check for the presence of structure within the embeddings that would allow them to be meaningfully broken down into sub-clusters
 
+clustering_functions.py provides various functions used by the main jupyter notebook.
+
+**Output**: Figures for use in the paper justifying how many clusters to use, a (subjective) answer to use 7 clusters going forward, Figures plotting examples images from each of the 7 clusters (or for different values of k, by adjusting this parameter at the start of the script) 
+
 ----------------
 
 ### 6-TestModelOverClusters_ControlledForSampleSize.ipynb
 
 This script evaluates how predictive performance varies with sample size and number of clusters, while controlling for unequal image counts across clusters.
 
+**Output**: A pickle file contaninig the results from these experiments. A figure plotting the results of these experiments (this can be created for various different error metrics by changing this parameter in the script). 
 ----------------
 
 ### 7-FindMedianEmbeddings_ForEachOf7Clusters.ipynb
 
-This script:
-- Finds the mean/min/max embedding within each cluster, within each LSOA
-- Saves a pickle file containing a dataframe containing this information
+This script finds the mean/min/max embedding within each cluster, within each LSOA.
 
+**Output**: A pickle file containing a dataframe containing this information
 ----------------
 
 ### 8-RunModels_ForEachOf7Clusters.ipynb
 
-This script:
-- Compares model performance:
-    - using data only from one of the clusters, for each of the clusters
- 
+This script compares model performance using data only from one of the clusters, for each of the clusters
+
+**Output**: A dataframe containing four different error metrics for a model trained and tested using solely images from each of 7 clusters. Also the same information plotted in a figure.
 ----------------
