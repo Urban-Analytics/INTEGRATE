@@ -19,4 +19,4 @@ dependencies:
   - sentence-transformers
   - libgfortran
   - ipywidgets
-prefix: /opt/homebrew/anaconda3/envs/integrate
+  - conda-forge::openai-clip
