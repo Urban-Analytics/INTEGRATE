@@ -2,8 +2,12 @@
 llm/python/together.ai_key.txt
 llm/python/google_maps_api_key.txt
 
+# Figure outputs
 llm/python/Molly/Figures/*.png
 llm/python/Molly/Figures/**/*.png
+
+# Data directory for the embeddings work
+llm/data/embeddings/
 
 # Build pages for the web
 _build
