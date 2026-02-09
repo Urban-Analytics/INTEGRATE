@@ -12,6 +12,10 @@ _site
 # vim
 *.swp
 
+# hugging face
+hf_cache/
+**/hf_cache/
+
 # Mac crap
 .DS_Store
 
