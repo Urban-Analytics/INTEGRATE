@@ -21,3 +21,4 @@ dependencies:
   - ipywidgets
   - conda-forge::openai-clip
   - umap-learn
+  - xgboost
