@@ -20,3 +20,4 @@ dependencies:
   - libgfortran
   - ipywidgets
   - conda-forge::openai-clip
+  - umap-learn
